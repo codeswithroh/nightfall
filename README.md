@@ -2,6 +2,8 @@
 
 **A real-time battle royale with true fog of war — where even the host can't see you.**
 
+▶ **Play:** https://nightfall-blitz.vercel.app
+
 Blocky heroes, a moonlit voxel arena, a closing world border, and one rule: you only see what your torch lights.
 Every position lives inside **MagicBlock's Private Ephemeral Rollup** (an Intel TDX enclave). Your wallet can read
 your own line of sight and nothing else. Not your opponents, not spectators, not the RPC, not the person who

@@ -196,7 +196,7 @@ a {
 .title {
   font-family: var(--pixel);
   font-weight: 700;
-  font-size: clamp(44px, 11vw, 104px);
+  font-size: clamp(38px, 9.6vw, 104px);
   line-height: 1;
   letter-spacing: 4px;
   color: #dfe6ff;
@@ -214,7 +214,7 @@ a {
   text-shadow: 2px 2px 0 #3f3f15;
   font-size: clamp(12px, 2.6vw, 16px);
   transform: rotate(-8deg);
-  margin: -6px 0 18px auto;
+  margin: 2px auto 18px;
   animation: pulse 0.9s ease-in-out infinite alternate;
   max-width: 320px;
   text-align: center;
@@ -771,4 +771,23 @@ a {
   to {
     transform: rotate(360deg);
   }
+}
+
+.dead-screen.collapsed {
+  background: transparent;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+
+.dead-screen.collapsed > * {
+  pointer-events: auto;
+}
+
+.dead-screen.collapsed h2 {
+  font-size: clamp(18px, 3.5vw, 30px);
+}
+
+.dead-screen.collapsed .panel {
+  max-height: 32vh;
+  overflow-y: auto;
 }

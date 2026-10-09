@@ -1,7 +1,7 @@
 import { BN } from "../lib/anchor";
 import { ACTION, STATUS } from "../lib/config";
 import { DX, DY, firstStepToward, inZone, walkable } from "../lib/map";
-import type { NightfallClient, VisionState } from "../lib/nightfall";
+import { visionPda, type NightfallClient, type VisionState } from "../lib/nightfall";
 
 /**
  * A bot is just another wallet. It plays from its own sealed Vision — the same fog as humans —
@@ -22,7 +22,6 @@ export class Bot {
   ) {}
 
   async start() {
-    const { visionPda } = await import("../lib/nightfall");
     this.stop = await this.client.watch(visionPda(this.arenaId, this.slot), (d) => {
       this.vision = this.client.decodeVision(d);
     }, 500);

@@ -29,8 +29,13 @@ function buildTerrain(scene: THREE.Scene) {
       if (c === "#") {
         cells.cobble.push(new THREE.Vector3(x, 0.5, y), new THREE.Vector3(x, 1.5, y));
       } else if (c === "T") {
-        cells.log.push(new THREE.Vector3(x, 0.5, y), new THREE.Vector3(x, 1.5, y));
-        cells.leaves.push(new THREE.Vector3(x, 2.5, y));
+        // Edge trees are short bushes so they frame the arena without hiding the players.
+        const edge = x === 0 || y === 0 || x === MAP_W - 1 || y === MAP_H - 1;
+        if (edge) cells.leaves.push(new THREE.Vector3(x, 0.55, y));
+        else {
+          cells.log.push(new THREE.Vector3(x, 0.5, y), new THREE.Vector3(x, 1.5, y));
+          cells.leaves.push(new THREE.Vector3(x, 2.5, y));
+        }
       } else if (c === '"') tall.push(new THREE.Vector3(x, 0, y));
     }
 
@@ -122,6 +127,8 @@ export class ArenaScene {
   readonly characters = new Map<number, Character>();
   /** When set, the camera follows this tile position. */
   follow: THREE.Vector2 | null = null;
+  /** "lobby" frames the line-up of joined players up close. */
+  cameraMode: "game" | "lobby" = "game";
   /** When true (spectators, end screen), no fog is drawn. */
   fullReveal = false;
   private orbit = 0;
@@ -332,10 +339,17 @@ export class ArenaScene {
     }
     for (const g of this.chests.values()) g.children[0].position.y = 0.35 + Math.sin(t * 2 + g.position.x) * 0.03;
 
-    if (this.follow) {
+    if (this.follow && this.cameraMode === "lobby") {
+      this.camTarget.lerp(new THREE.Vector3(this.follow.x, 0, this.follow.y), 1 - Math.exp(-dt * 4));
+      const sway = Math.sin(t * 0.25) * 1.2;
+      this.camera.position.set(this.camTarget.x + sway, 7.5, this.camTarget.z + 6);
+      // Aim below the line-up so it sits in the upper half, clear of the lobby panel.
+      this.camera.lookAt(this.camTarget.x, 0.2, this.camTarget.z + 1.8);
+    } else if (this.follow) {
       this.camTarget.lerp(new THREE.Vector3(this.follow.x, 0, this.follow.y), 1 - Math.exp(-dt * 8));
       const portrait = this.camera.aspect < 1;
-      this.camera.position.set(this.camTarget.x, portrait ? 13 : 10, this.camTarget.z + (portrait ? 7 : 7.5));
+      // Steep enough that two-block walls and trees never hide the player behind them.
+      this.camera.position.set(this.camTarget.x, portrait ? 15 : 12, this.camTarget.z + (portrait ? 6.5 : 6.2));
       this.camera.lookAt(this.camTarget.x, 0, this.camTarget.z + 0.3);
     } else {
       this.orbit += dt * 0.06;

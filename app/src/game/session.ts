@@ -171,7 +171,8 @@ export class MatchSession {
       }
     }
     const alive = Array.from({ length: a.playerCount }, (_, i) => (a.alive >> i) & 1).reduce((s, b) => s + b, 0);
-    h(this.hud, "[data-alive]").innerHTML = a.status === STATUS.live ? `<b>${alive}</b> alive` : "waiting";
+    h(this.hud, "[data-alive]").innerHTML =
+      a.status === STATUS.live ? `<b>${alive}</b> alive` : a.status >= STATUS.ended ? "match over" : "waiting for spawn…";
     h(this.hud, "[data-kills]").innerHTML = this.o.slot >= 0 ? `<b>${a.kills[this.o.slot]}</b> kills` : "spectating";
 
     if (a.status >= STATUS.ended && !this.ended) {
@@ -194,6 +195,7 @@ export class MatchSession {
       this.pred.set(x, y);
       this.facing = facing;
       this.me = new Character(this.arena?.skins[this.o.slot] ?? 0, this.name(this.o.slot), "#ffff80");
+      this.me.setRing(0xffe040);
       this.me.place(x, y, facing);
       scene.scene.add(this.me.root);
       scene.characters.set(this.o.slot, this.me);
@@ -247,6 +249,7 @@ export class MatchSession {
       let c = scene.characters.get(slot);
       if (!c) {
         c = new Character(this.arena?.skins[slot] ?? 0, this.name(slot), "#ff8080");
+        c.setRing(0xff3030);
         c.place(ex, ey, efacing);
         scene.scene.add(c.root);
         scene.characters.set(slot, c);
@@ -570,7 +573,10 @@ export class MatchSession {
   private renderZoneTimer() {
     const a = this.arena;
     const el = h(this.hud, "[data-zone]");
-    if (!a || a.status !== STATUS.live) return;
+    if (!a || a.status !== STATUS.live) {
+      if (a && a.status >= STATUS.ended) el.style.display = "none";
+      return;
+    }
     const now = Date.now() / 1000;
     const elapsed = now - a.startTs.toNumber();
     let label: string;
@@ -585,7 +591,7 @@ export class MatchSession {
       urgent = true;
     } else label = `<b>Final circle</b>`;
     const me = this.vision?.me;
-    if (me && me[6] && !this.insideZone(me[0], me[1], a.zone)) {
+    if (me && me[6] && !this.spectator && !this.insideZone(me[0], me[1], a.zone)) {
       label = `<b>OUTSIDE THE BORDER</b> — move!`;
       urgent = true;
     }
@@ -702,12 +708,11 @@ export class MatchSession {
         let info = await conn.getAccountInfo(worldPda(this.o.arenaId));
         if (!info) {
           const sig = await this.o.me.reveal(this.o.arenaId);
-          log(`Revealed · <a href="${explorerTx(sig)}" target="_blank" rel="noreferrer">tx</a> (ER)`);
+          log(`Revealed inside the TEE · <code>${sig.slice(0, 10)}…</code>`);
           info = await conn.getAccountInfo(worldPda(this.o.arenaId));
         }
         if (info) this.revealWorld(this.o.me.decodeWorld(info.data));
-        el.style.background = "transparent";
-        el.style.justifyContent = "flex-end";
+        el.classList.add("collapsed");
       } catch (err) {
         log(`<span style="color:#ff8080">${esc((err as Error).message.split("\n")[0])}</span>`);
         b.disabled = false;
@@ -719,7 +724,7 @@ export class MatchSession {
       try {
         log("Committing the result to Solana and closing the rollup session…");
         const s1 = await this.o.me.settle(this.o.arenaId);
-        log(`Committed · <a href="${explorerTx(s1)}" target="_blank" rel="noreferrer">ER tx</a>`);
+        log(`Commit scheduled from the TEE · <code>${s1.slice(0, 10)}…</code>`);
         if (a.winner !== NONE) {
           log("Waiting for the arena to land on Solana, then paying the winner…");
           const s2 = await this.o.me.claim(this.o.arenaId, a.players[a.winner]);

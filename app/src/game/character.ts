@@ -256,11 +256,24 @@ export class Character {
     this.armL.add(this.bow);
 
     this.root.add(this.body);
+    // Characters read better a touch larger than one block wide.
+    this.body.scale.setScalar(1.3);
     if (name) {
       this.tag = nameTag(name, tagColor);
-      this.tag.position.y = 1.35;
+      this.tag.position.y = 1.65;
       this.root.add(this.tag);
     }
+  }
+
+  /** A soft coloured ring on the ground: yellow for you, red for enemies. */
+  setRing(color: number) {
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.34, 0.46, 24),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.75, depthWrite: false, fog: false }),
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.03;
+    this.root.add(ring);
   }
 
   setWeapon(weapon: number) {

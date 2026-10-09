@@ -1,7 +1,7 @@
 import "./polyfills";
 import "./ui/style.css";
 import * as THREE from "three";
-import { Keypair, LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
+import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 import { BN } from "./lib/anchor";
 import { NightfallClient, browserKV, decodeName, type ArenaState } from "./lib/nightfall";
 import { MAX_PLAYERS, PROGRAM_ID, STATUS, explorerAddress } from "./lib/config";
@@ -58,6 +58,7 @@ let lobbyChars: Character[] = [];
 const clearUi = () => {
   ui.innerHTML = "";
   lobbyStop = true;
+  scene.cameraMode = "game";
   for (const c of lobbyChars) c.dispose();
   lobbyChars = [];
   for (const k of [...scene.characters.keys()]) if (k >= 100) scene.characters.delete(k);
@@ -82,8 +83,8 @@ function skinPreview(canvas: HTMLCanvasElement, getSkin: () => number) {
   dl.position.set(1, 2, 3);
   s.add(dl);
   const cam = new THREE.PerspectiveCamera(30, 96 / 120, 0.1, 10);
-  cam.position.set(0, 0.62, 2.7);
-  cam.lookAt(0, 0.52, 0);
+  cam.position.set(0, 0.8, 3.5);
+  cam.lookAt(0, 0.68, 0);
   let current = -1;
   let ch: Character | null = null;
   let alive = true;
@@ -193,7 +194,6 @@ function home() {
     const b = e.currentTarget as HTMLButtonElement;
     b.disabled = true;
     try {
-      const { Connection } = await import("@solana/web3.js");
       const c = new Connection("https://api.devnet.solana.com", "confirmed");
       const sig = await c.requestAirdrop(me.publicKey, 0.5 * LAMPORTS_PER_SOL);
       await c.confirmTransaction(sig, "confirmed");
@@ -317,7 +317,9 @@ function placeLobbyCharacters(arena: ArenaState) {
     lobbyChars.push(c);
     scene.characters.set(100 + i, c);
   }
-  scene.follow = new THREE.Vector2(11.5, 11.5);
+  scene.follow = new THREE.Vector2(8.5 + arena.playerCount / 2, 12);
+  scene.cameraMode = "lobby";
+  scene.setTorch(8.5 + arena.playerCount / 2, 13.5, true);
 }
 
 function lobby(id: BN) {

@@ -28,6 +28,8 @@ export const MAX_HP = 20;
 /** Mirrors logic.rs so the client can draw the border without asking anyone. */
 export const ZONE = { start: 12, min: 1, graceSecs: 40, shrinkSecs: 8 } as const;
 export const VISION_R2 = 20;
+/** Mirrors logic.rs: no player damage for the first seconds of a match. */
+export const SPAWN_SAFE_SECS = 10;
 
 export const zoneAt = (startTs: number, nowSecs: number) => {
   const elapsed = nowSecs - startTs;

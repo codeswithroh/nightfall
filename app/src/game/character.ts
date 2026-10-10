@@ -276,6 +276,11 @@ export class Character {
     this.root.add(ring);
   }
 
+  setTagScale(k: number) {
+    this.tag?.scale.set(1.2 * k, 0.3 * k, 1);
+    if (this.tag) this.tag.position.y = 1.65 + 0.3 * (k - 1);
+  }
+
   setWeapon(weapon: number) {
     this.sword.visible = weapon !== 2;
     this.diamondSword.visible = weapon === 2;

@@ -13,6 +13,7 @@ export class Bot {
   private timer: ReturnType<typeof setInterval> | null = null;
   private wander = Math.floor(Math.random() * 4);
   private lastAttack = 0;
+  private startedAt = Date.now();
 
   constructor(
     readonly client: NightfallClient,
@@ -48,6 +49,8 @@ export class Bot {
 
     // Bots hesitate sometimes, so a quick human can win the exchange.
     const hesitate = Math.random() < (this.difficulty === "easy" ? 0.35 : 0.18);
+    // Easy bots spend the opening looting and exploring instead of hunting.
+    const calm = this.difficulty === "easy" && Date.now() - this.startedAt < 25_000;
     // 1. Adjacent enemy → swing.
     for (let d = 0; d < 4 && dir < 0 && !hesitate; d++)
       if (occupied(mx + DX[d], my + DY[d]) && Date.now() - this.lastAttack > 260) {
@@ -70,14 +73,14 @@ export class Bot {
     if (dir < 0 && !inZone(Math.max(1, v.zone - 1), mx, my))
       dir = firstStepToward(mx, my, (x, y) => inZone(Math.max(1, v.zone - 2), x, y), occupied);
     // 4. Visible enemy → chase. Visible chest → loot.
-    if (dir < 0 && enemies.length)
+    if (dir < 0 && enemies.length && !calm)
       dir = firstStepToward(mx, my, (x, y) => enemies.some((e) => Math.abs(e.x - x) + Math.abs(e.y - y) === 1), occupied);
     if (dir < 0 && v.chestCount > 0) {
       const chests = v.chests.slice(0, v.chestCount);
       dir = firstStepToward(mx, my, (x, y) => chests.some((c) => c[0] === x && c[1] === y), occupied);
     }
     // 5. Heard footsteps → creep toward the sound.
-    if (dir < 0 && v.heard) {
+    if (dir < 0 && v.heard && !calm && Math.random() < (this.difficulty === "easy" ? 0.5 : 1)) {
       const ks = [0, 1, 2, 3, 4, 5, 6, 7].filter((k) => (v.heard >> k) & 1);
       const k = ks[Math.floor(Math.random() * ks.length)];
       const ang = (k * Math.PI) / 4;

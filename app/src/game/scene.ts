@@ -128,7 +128,7 @@ export class ArenaScene {
   /** When set, the camera follows this tile position. */
   follow: THREE.Vector2 | null = null;
   /** "lobby" frames the line-up of joined players up close. */
-  cameraMode: "game" | "lobby" = "game";
+  cameraMode: "game" | "lobby" | "overview" = "game";
   /** When true (spectators, end screen), no fog is drawn. */
   fullReveal = false;
   private orbit = 0;
@@ -480,6 +480,12 @@ export class ArenaScene {
       // Steep enough that two-block walls and trees never hide the player behind them.
       this.camera.position.set(this.camTarget.x, portrait ? 15 : 12, this.camTarget.z + (portrait ? 6.5 : 6.2));
       this.camera.lookAt(this.camTarget.x, 0, this.camTarget.z + 0.3);
+    } else if (this.cameraMode === "overview") {
+      // Whole arena from above, slowly drifting: for the post-match reveal.
+      this.orbit += dt * 0.05;
+      const portrait = this.camera.aspect < 1;
+      this.camera.position.set(11.5 + Math.sin(this.orbit) * 2, portrait ? 34 : 22, 11.5 + (portrait ? 14 : 13));
+      this.camera.lookAt(11.5, 0, 12);
     } else {
       this.orbit += dt * 0.06;
       const r = this.camera.aspect < 1 ? 26 : 19;

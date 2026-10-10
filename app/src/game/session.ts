@@ -7,6 +7,7 @@ import {
   NONE,
   STATUS,
   ZONE,
+  SPAWN_SAFE_SECS,
   explorerAddress,
   explorerTx,
 } from "../lib/config";
@@ -162,6 +163,7 @@ export class MatchSession {
     for (const g of this.ghosts.values()) g.sprite.removeFromParent();
     this.o.scene.onFrame = () => {};
     this.o.scene.follow = null;
+    this.o.scene.cameraMode = "game";
     this.hud.remove();
   }
 
@@ -172,8 +174,13 @@ export class MatchSession {
     return decodeName(this.arena.names[slot]) || `Player ${slot + 1}`;
   }
 
+  /** The player's shirt colour, lifted so dark skins (Shade) stay readable on dark panels. */
   private skinColor(slot: number) {
-    return SKINS[(this.arena?.skins[slot] ?? 0) % SKINS.length].shirt;
+    const c = new THREE.Color(SKINS[(this.arena?.skins[slot] ?? 0) % SKINS.length].shirt);
+    const hsl = { h: 0, s: 0, l: 0 };
+    c.getHSL(hsl);
+    c.setHSL(hsl.h, Math.min(1, hsl.s + 0.1), Math.max(hsl.l, 0.68));
+    return `#${c.getHexString()}`;
   }
 
   private onArena(a: ArenaState) {
@@ -228,6 +235,8 @@ export class MatchSession {
   }
 
   private onVision(v: VisionState) {
+    // After the reveal the true World drives the scene; late Vision updates must not prune it.
+    if (this.revealed) return;
     if (this.vision && v.version <= this.vision.version && v.status === this.vision.status) return;
     const prev = this.vision;
     this.vision = v;
@@ -245,7 +254,7 @@ export class MatchSession {
       scene.scene.add(this.me.root);
       scene.characters.set(this.o.slot, this.me);
       scene.follow = this.pred;
-      this.banner("NIGHTFALL", "Last one standing wins. Stay inside the border.", 2600);
+      this.banner("NIGHTFALL", `Last one standing wins. ${SPAWN_SAFE_SECS}s of spawn protection, so get your bearings.`, 3000);
       setTimeout(() => this.coach("move", `Move with ${key("W")}${key("A")}${key("S")}${key("D")} or the arrow keys. Or <b>click the ground</b> to walk there.`, 0), 2700);
       this.chat("Spawn point rolled by <b>MagicBlock VRF</b> — sealed in the TEE.");
     }
@@ -331,7 +340,7 @@ export class MatchSession {
       this.ghosts.delete(slot);
     }
     for (const [slot, c] of scene.characters) {
-      if (slot === this.o.slot || visible.has(slot)) continue;
+      if (slot === this.o.slot || visible.has(slot) || this.ended) continue;
       const diedNow = this.arena && !((this.arena.alive >> slot) & 1);
       if (diedNow && !this.dyingUntil.has(slot)) {
         c.die();
@@ -861,7 +870,9 @@ export class MatchSession {
     const elapsed = now - a.startTs.toNumber();
     let label: string;
     let urgent = false;
-    if (elapsed < ZONE.graceSecs) {
+    if (elapsed < SPAWN_SAFE_SECS) {
+      label = `🛡 Spawn protection <b>${Math.ceil(SPAWN_SAFE_SECS - elapsed)}s</b>`;
+    } else if (elapsed < ZONE.graceSecs) {
       const s = Math.ceil(ZONE.graceSecs - elapsed);
       label = `Border moves in <b>${s}s</b>`;
       urgent = s <= 5;
@@ -1041,6 +1052,8 @@ export class MatchSession {
     }
     scene.setChests(w.chests.filter((c) => !c[3]).map(([x, y, kind]) => ({ x, y, kind })));
     scene.follow = null;
+    scene.cameraMode = "overview";
+    for (const c of scene.characters.values()) c.setTagScale(2.2);
     this.chat("☀ The sun rises. Every position is now public — check it against what you saw.");
   }
 }

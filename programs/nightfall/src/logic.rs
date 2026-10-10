@@ -16,6 +16,9 @@ pub const BOW_COOLDOWN_SLOTS: u64 = 10;
 pub const APPLE_HEAL: u8 = 8;
 pub const QUIVER_ARROWS: u8 = 4;
 
+/// Nobody can be hurt by another player for the first seconds of a match.
+pub const SPAWN_SAFE_SECS: i64 = 10;
+
 pub const ZONE_START: u8 = 12;
 pub const ZONE_MIN: u8 = 1;
 pub const ZONE_GRACE_SECS: i64 = 40;
@@ -109,10 +112,15 @@ impl Rng<'_> {
 /// Place every player on a random spawn and scatter the loot chests.
 pub fn spawn(arena: &mut Arena, world: &mut World, randomness: &[u8; 32], now: i64) {
     let mut rng = Rng { bytes: randomness, i: 0 };
-    let mut spawns: [usize; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
-    for i in (1..spawns.len()).rev() {
-        spawns.swap(i, rng.below(i + 1));
+    // The four corners fill first (indices 0, 1, 6, 7 in map scan order), then the side
+    // spawns, so small matches start as far apart as possible.
+    let mut corners: [usize; 4] = [0, 1, 6, 7];
+    let mut sides: [usize; 4] = [2, 3, 4, 5];
+    for i in (1..4).rev() {
+        corners.swap(i, rng.below(i + 1));
+        sides.swap(i, rng.below(i + 1));
     }
+    let spawns = [corners[0], corners[1], corners[2], corners[3], sides[0], sides[1], sides[2], sides[3]];
     let mut spots: [usize; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
     for i in (1..spots.len()).rev() {
         spots.swap(i, rng.below(i + 1));
@@ -189,6 +197,7 @@ pub enum ActError {
 pub fn act(arena: &mut Arena, world: &mut World, me: usize, action: u8, dir: u8, slot: u64, now: i64) -> Result<(), ActError> {
     let d = (dir % 4) as usize;
     world.facing[me] = d as u8;
+    let protected = now < arena.start_ts + SPAWN_SAFE_SECS;
     let (x, y) = (world.x[me] as i32, world.y[me] as i32);
     let opposite = ((d + 2) % 4) as u8;
     match action {
@@ -214,7 +223,7 @@ pub fn act(arena: &mut Arena, world: &mut World, me: usize, action: u8, dir: u8,
                 return Err(ActError::Cooldown);
             }
             world.last_attack_slot[me] = slot;
-            if let Some(v) = player_at(arena, world, x + DX[d], y + DY[d]) {
+            if let Some(v) = player_at(arena, world, x + DX[d], y + DY[d]).filter(|_| !protected) {
                 let dmg = SWORD_DMG[world.weapon[me] as usize % 3];
                 damage(arena, world, v, dmg, me as u8, opposite, CAUSE_SWORD);
             }
@@ -245,7 +254,7 @@ pub fn act(arena: &mut Arena, world: &mut World, me: usize, action: u8, dir: u8,
             world.shot_seq = world.shot_seq.wrapping_add(1);
             let idx = world.shot_seq as usize % MAX_SHOTS;
             world.shots[idx] = [me as u8, x as u8, y as u8, ex as u8, ey as u8, world.shot_seq];
-            if let Some(v) = hit {
+            if let Some(v) = hit.filter(|_| !protected) {
                 damage(arena, world, v, BOW_DMG, me as u8, opposite, CAUSE_BOW);
             }
         }
@@ -486,7 +495,7 @@ mod tests {
         assert_eq!(v.seen_count, 1);
         assert_eq!(v.seen[0][0], 1);
         for k in 0..5u64 {
-            let _ = act(&mut a, &mut w, 0, ACT_SWORD, 1, 100 + k * SWORD_COOLDOWN_SLOTS, 1);
+            let _ = act(&mut a, &mut w, 0, ACT_SWORD, 1, 100 + k * SWORD_COOLDOWN_SLOTS, 100);
         }
         assert!(!a.is_alive(1));
         assert_eq!(a.status, STATUS_ENDED);
@@ -497,6 +506,19 @@ mod tests {
         spawn(&mut a2, &mut w2, &[3u8; 32], 0);
         assert!(act(&mut a2, &mut w2, 0, ACT_SWORD, 1, 50, 1).is_ok());
         assert!(matches!(act(&mut a2, &mut w2, 0, ACT_SWORD, 1, 51, 1), Err(ActError::Cooldown)));
+    }
+
+    #[test]
+    fn spawn_protection_and_spread() {
+        let (mut a, mut w) = (arena(2), world());
+        spawn(&mut a, &mut w, &[5u8; 32], 1000);
+        // Two players always start in different corners: at least 21 tiles apart on one axis.
+        assert!((w.x[0] as i32 - w.x[1] as i32).abs() >= 20 || (w.y[0] as i32 - w.y[1] as i32).abs() >= 20);
+        (w.x[0], w.y[0], w.x[1], w.y[1]) = (1, 7, 2, 7);
+        assert!(act(&mut a, &mut w, 0, ACT_SWORD, 1, 100, 1005).is_ok());
+        assert_eq!(w.hp[1], MAX_HP);
+        assert!(act(&mut a, &mut w, 0, ACT_SWORD, 1, 200, 1000 + SPAWN_SAFE_SECS).is_ok());
+        assert!(w.hp[1] < MAX_HP);
     }
 
     #[test]

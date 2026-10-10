@@ -1,7 +1,7 @@
 import "./polyfills";
 import "./ui/style.css";
 import * as THREE from "three";
-import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
+import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram } from "@solana/web3.js";
 import { BN } from "./lib/anchor";
 import { NightfallClient, browserKV, decodeName, type ArenaState } from "./lib/nightfall";
 import { MAX_PLAYERS, PROGRAM_ID, STATUS, explorerAddress } from "./lib/config";
@@ -299,11 +299,22 @@ async function quickPlay(status: (s: string) => void) {
   kv.set(`nightfall-quick-${id}`, "1");
   status("Sealing your vision in the TEE…");
   await me.sealMyVision(id, 0);
-  for (let i = 0; i < 3; i++) {
-    const arena = (await me.fetchArena(id))!.arena;
-    status(`Waking bot ${i + 1} of 3…`);
-    await addBot(id, arena, () => {});
+  status("Waking 3 bots…");
+  const botKeys = [0, 1, 2].map((i) => {
+    kv.set(`nightfall-bots-${id}`, String(i + 1));
+    return loadKeypair(`nightfall-bot-${id}-${i}`);
+  });
+  // One transaction funds all three bot wallets.
+  await me.sendBase(botKeys.map((k) => SystemProgram.transfer({ fromPubkey: me.publicKey, toPubkey: k.publicKey, lamports: 0.012 * LAMPORTS_PER_SOL })));
+  const seals: Promise<unknown>[] = [];
+  for (const [i, kp] of botKeys.entries()) {
+    status(`Bot ${i + 1} of 3 joining…`);
+    const bot = new NightfallClient(kp, kv);
+    const slot = await bot.joinArena(id, botNames[i % botNames.length], Math.floor(Math.random() * SKINS.length));
+    seals.push(bot.sealMyVision(id, slot));
   }
+  status("Sealing every vision in the TEE…");
+  await Promise.all(seals);
   status("Rolling spawn points with VRF…");
   await me.startMatch(id, (s) => status(s.replace(/…$/, "")));
   const fresh = (await me.fetchArena(id))!.arena;

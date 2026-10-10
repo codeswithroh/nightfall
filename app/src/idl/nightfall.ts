@@ -1652,6 +1652,14 @@ export type Nightfall = {
             }
           },
           {
+            "name": "heard",
+            "docs": [
+              "Hearing: bit k set = an unseen enemy is somewhere in compass octant k (0 = N, clockwise).",
+              "A direction, never a position."
+            ],
+            "type": "u8"
+          },
+          {
             "name": "bump",
             "type": "u8"
           }

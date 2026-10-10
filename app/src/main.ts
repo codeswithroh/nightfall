@@ -30,6 +30,7 @@ const loadKeypair = (key: string) => {
 };
 const me = new NightfallClient(loadKeypair("nightfall-burner"), kv);
 let myName = kv.get("nightfall-name") || ["Steve", "Alex", "Nova", "Pixel", "Blaze", "Echo"][Math.floor(Math.random() * 6)];
+kv.set("nightfall-name", myName);
 let mySkin = Number(kv.get("nightfall-skin") ?? Math.floor(Math.random() * SKINS.length)) % SKINS.length;
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -121,6 +122,7 @@ function home() {
   // The title screen shows the whole moonlit arena; fog only exists during a match.
   scene.clearFog();
   scene.setTorch(0, 0, false);
+  scene.zoneTarget = 12;
   setUrl();
   const el = document.createElement("div");
   el.className = "screen";
@@ -146,7 +148,18 @@ function home() {
           <span class="row"><button class="btn small" data-airdrop>Get devnet SOL</button></span>
         </div>
       </div>
-      <div class="panel col">
+      <button class="btn primary big" data-quick>▶ Quick play vs 3 bots</button>
+      <div class="panel col howto">
+        <div class="label">How to play</div>
+        <div class="steps">
+          <div><span class="num">1</span><b>Move</b> with <kbd>WASD</kbd> or click the ground. Your torch is all you can see.</div>
+          <div><span class="num">2</span><b>Fight</b> with <kbd>SPACE</kbd>: sword up close, bow if they're lined up. Loot glowing chests.</div>
+          <div><span class="num">3</span><b>Survive</b>: stay inside the shrinking border. Last one standing wins.</div>
+        </div>
+      </div>
+      <details class="panel col more">
+        <summary class="label">Play with friends · stakes · spectate</summary>
+        <div class="col" style="margin-top:10px">
         <div class="label">Entry stake (winner takes the pot)</div>
         <div class="chips" data-stakes>
           <button class="chip on" data-stake="0">FREE</button>
@@ -159,7 +172,8 @@ function home() {
           <button class="btn" data-join>Join</button>
         </div>
         <button class="btn" data-watch>👁 Spectate an arena</button>
-      </div>
+        </div>
+      </details>
     </div>
     <div class="feature-strip">
       <span>⚡ Ephemeral Rollup · ~50ms moves</span><span>🔒 Private ER (Intel TDX)</span><span>🎲 VRF spawns</span><span>⏱ Crank-driven border</span><span>💰 Onchain pot</span>
@@ -221,6 +235,23 @@ function home() {
     b.disabled = true;
     b.innerHTML = `<span class="spinner"></span> ${label}`;
   };
+  el.querySelector("[data-quick]")!.addEventListener("click", async (e) => {
+    sfx.unlock();
+    const b = e.currentTarget as HTMLButtonElement;
+    const lamports = (await refreshBalance(bal)) ?? 0;
+    if (lamports < 0.06 * LAMPORTS_PER_SOL) {
+      toast("Quick play needs ~0.06 devnet SOL for the arena and 3 bot wallets. Tap “Get devnet SOL” first.", true);
+      return;
+    }
+    busy(b, "Opening a private arena…");
+    try {
+      await quickPlay((msg) => (b.innerHTML = `<span class="spinner"></span> ${msg}`));
+    } catch (err) {
+      toast(errMsg(err), true);
+      b.disabled = false;
+      b.textContent = "▶ Quick play vs 3 bots";
+    }
+  });
   el.querySelector("[data-create]")!.addEventListener("click", async (e) => {
     sfx.unlock();
     const b = e.currentTarget as HTMLButtonElement;
@@ -259,6 +290,34 @@ function home() {
   });
 }
 
+/** One click: arena + three bots + start, then straight into the match. */
+async function quickPlay(status: (s: string) => void) {
+  const id = new BN(Date.now()).muln(10).addn(Math.floor(Math.random() * 10));
+  status("Opening a private arena…");
+  await me.createArena(id, new BN(0), MAX_PLAYERS, myName, mySkin);
+  kv.set(`nightfall-host-${id}`, "1");
+  kv.set(`nightfall-quick-${id}`, "1");
+  status("Sealing your vision in the TEE…");
+  await me.sealMyVision(id, 0);
+  for (let i = 0; i < 3; i++) {
+    const arena = (await me.fetchArena(id))!.arena;
+    status(`Waking bot ${i + 1} of 3…`);
+    await addBot(id, arena, () => {});
+  }
+  status("Rolling spawn points with VRF…");
+  await me.startMatch(id, (s) => status(s.replace(/…$/, "")));
+  const fresh = (await me.fetchArena(id))!.arena;
+  void me.scheduleTicks(id, fresh.playerCount).catch(() => {});
+  await play(id, 0);
+}
+
+/** From the end screen: straight into a fresh quick-play match. */
+function playAgain() {
+  home();
+  const b = document.querySelector<HTMLButtonElement>("[data-quick]");
+  b?.click();
+}
+
 async function joinFlow(id: BN) {
   const found = await me.fetchArena(id);
   if (!found) throw new Error("No arena with that code");
@@ -293,7 +352,7 @@ async function addBot(id: BN, arena: ArenaState, log: (s: string) => void) {
   await bot.sealMyVision(id, slot);
 }
 
-function botsFor(id: BN, arena: ArenaState) {
+function botsFor(id: BN, arena: ArenaState, difficulty: "easy" | "normal" = "normal") {
   const out: Bot[] = [];
   const n = Number(kv.get(`nightfall-bots-${id}`) ?? "0");
   for (let i = 0; i < n; i++) {
@@ -301,7 +360,7 @@ function botsFor(id: BN, arena: ArenaState) {
     if (!saved) continue;
     const kp = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(saved)));
     const slot = arena.players.slice(0, arena.playerCount).findIndex((p) => p.equals(kp.publicKey));
-    if (slot >= 0) out.push(new Bot(new NightfallClient(kp, kv), id, slot, arena.playerCount));
+    if (slot >= 0) out.push(new Bot(new NightfallClient(kp, kv), id, slot, arena.playerCount, difficulty));
   }
   return out;
 }
@@ -441,8 +500,9 @@ async function play(id: BN, slot: number) {
   setUrl(id.toString());
   const found = await me.fetchArena(id);
   const arena = found?.arena;
-  bots = arena && kv.get(`nightfall-host-${id}`) === "1" ? botsFor(id, arena) : [];
-  session = new MatchSession({ scene, me, arenaId: id, slot, ui, bots, onExit: home, toast });
+  const easy = kv.get(`nightfall-quick-${id}`) === "1";
+  bots = arena && kv.get(`nightfall-host-${id}`) === "1" ? botsFor(id, arena, easy ? "easy" : "normal") : [];
+  session = new MatchSession({ scene, me, arenaId: id, slot, ui, bots, onExit: home, toast, onPlayAgain: playAgain });
   await session.start();
   for (const b of bots) void b.start();
 }

@@ -19,13 +19,17 @@ export class Bot {
     readonly arenaId: BN,
     readonly slot: number,
     private playerCount: number,
+    /** "easy" bots react slower and hesitate more: good for a first match. */
+    private difficulty: "easy" | "normal" = "normal",
   ) {}
 
   async start() {
     this.stop = await this.client.watch(visionPda(this.arenaId, this.slot), (d) => {
       this.vision = this.client.decodeVision(d);
     }, 500);
-    this.timer = setInterval(() => void this.think(), 380 + Math.random() * 120);
+    // Human-ish reaction time; each bot is a little different.
+    const base = this.difficulty === "easy" ? 640 : 430;
+    this.timer = setInterval(() => void this.think(), base + Math.random() * 160);
   }
 
   dispose() {
@@ -42,14 +46,16 @@ export class Bot {
     let action: number = ACTION.move;
     let dir = -1;
 
+    // Bots hesitate sometimes, so a quick human can win the exchange.
+    const hesitate = Math.random() < (this.difficulty === "easy" ? 0.35 : 0.18);
     // 1. Adjacent enemy → swing.
-    for (let d = 0; d < 4 && dir < 0; d++)
+    for (let d = 0; d < 4 && dir < 0 && !hesitate; d++)
       if (occupied(mx + DX[d], my + DY[d]) && Date.now() - this.lastAttack > 260) {
         action = ACTION.sword;
         dir = d;
       }
     // 2. Enemy in a straight line → shoot.
-    if (dir < 0 && arrows > 0 && Date.now() - this.lastAttack > 650)
+    if (dir < 0 && !hesitate && arrows > 0 && Date.now() - this.lastAttack > 650)
       for (const e of enemies) {
         if (e.x === mx || e.y === my) {
           const d = e.x === mx ? (e.y < my ? 0 : 2) : e.x > mx ? 1 : 3;
@@ -70,7 +76,16 @@ export class Bot {
       const chests = v.chests.slice(0, v.chestCount);
       dir = firstStepToward(mx, my, (x, y) => chests.some((c) => c[0] === x && c[1] === y), occupied);
     }
-    // 5. Wander, drifting toward the centre.
+    // 5. Heard footsteps → creep toward the sound.
+    if (dir < 0 && v.heard) {
+      const ks = [0, 1, 2, 3, 4, 5, 6, 7].filter((k) => (v.heard >> k) & 1);
+      const k = ks[Math.floor(Math.random() * ks.length)];
+      const ang = (k * Math.PI) / 4;
+      const tx = Math.round(mx + Math.sin(ang) * 4);
+      const ty = Math.round(my - Math.cos(ang) * 4);
+      dir = firstStepToward(mx, my, (x, y) => Math.abs(x - tx) + Math.abs(y - ty) <= 1, occupied);
+    }
+    // 6. Wander, drifting toward the centre.
     if (dir < 0) {
       if (Math.random() < 0.25 || !walkable(mx + DX[this.wander], my + DY[this.wander])) {
         const towardCenter = Math.abs(11.5 - mx) > Math.abs(11.5 - my) ? (mx < 11.5 ? 1 : 3) : my < 11.5 ? 2 : 0;

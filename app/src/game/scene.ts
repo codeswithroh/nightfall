@@ -132,6 +132,14 @@ export class ArenaScene {
   /** When true (spectators, end screen), no fog is drawn. */
   fullReveal = false;
   private orbit = 0;
+  /** Tiles this player has ever had in view: drawn as remembered (dimmer) rather than unknown. */
+  private explored = new Uint8Array(MAP_W * MAP_H);
+  private freezeUntil = 0;
+  private floaters: { sprite: THREE.Sprite; vy: number; life: number }[] = [];
+  private heardArcs: THREE.Mesh[] = [];
+  private guide: THREE.Mesh;
+  private ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  private raycaster = new THREE.Raycaster();
   onFrame: (dt: number, t: number) => void = () => {};
 
   constructor(private container: HTMLElement) {
@@ -178,6 +186,36 @@ export class ArenaScene {
     }
     this.layoutBorder(12);
 
+    // Hearing compass: eight arcs around the player, lit for octants where someone unseen is close.
+    const arcMat = new THREE.MeshBasicMaterial({ color: 0xff4040, transparent: true, opacity: 0.0, depthWrite: false, fog: false, side: THREE.DoubleSide });
+    for (let k = 0; k < 8; k++) {
+      // Octant 0 is north (-z). Ring angles run counter-clockwise from +x in the XY plane before rotation.
+      const center = Math.PI / 2 - (k * Math.PI) / 4;
+      const arc = new THREE.Mesh(new THREE.RingGeometry(1.15, 1.45, 12, 1, center - Math.PI / 9, (Math.PI * 2) / 9), arcMat.clone());
+      arc.rotation.x = -Math.PI / 2;
+      arc.renderOrder = 6;
+      this.heardArcs.push(arc);
+      this.scene.add(arc);
+    }
+    // Guide arrow toward the safe zone.
+    const shape = new THREE.Shape();
+    shape.moveTo(0, 0.55);
+    shape.lineTo(0.35, 0.05);
+    shape.lineTo(0.12, 0.05);
+    shape.lineTo(0.12, -0.45);
+    shape.lineTo(-0.12, -0.45);
+    shape.lineTo(-0.12, 0.05);
+    shape.lineTo(-0.35, 0.05);
+    shape.closePath();
+    this.guide = new THREE.Mesh(
+      new THREE.ShapeGeometry(shape),
+      new THREE.MeshBasicMaterial({ color: 0x8fd8ff, transparent: true, opacity: 0.9, depthWrite: false, fog: false, side: THREE.DoubleSide }),
+    );
+    this.guide.rotation.x = -Math.PI / 2;
+    this.guide.visible = false;
+    this.guide.renderOrder = 7;
+    this.scene.add(this.guide);
+
     this.resize();
     window.addEventListener("resize", this.resize);
     this.renderer.setAnimationLoop(this.frame);
@@ -217,10 +255,13 @@ export class ArenaScene {
         const dx = tx - x;
         const dy = ty - y;
         const d2 = dx * dx + dy * dy;
-        let a = 228;
+        const k = ty * MAP_W + tx;
+        let a = this.explored[k] ? 175 : 232;
         if (this.fullReveal) a = 0;
-        else if (alive && d2 <= VISION_R2 && lineOfSight(x, y, tx, ty)) a = Math.min(80, d2 * 3);
-        else if (alive && d2 <= VISION_R2 + 6) a = 190;
+        else if (alive && d2 <= VISION_R2 && lineOfSight(x, y, tx, ty)) {
+          a = Math.min(80, d2 * 3);
+          this.explored[k] = 1;
+        } else if (alive && d2 <= VISION_R2 + 6) a = Math.min(a, 190);
         // Texture row 0 is v = 0, which the -90° X rotation puts at the south edge (y = 23).
         const j = ((MAP_H - 1 - ty) * MAP_W + tx) * 4;
         this.fogData[j] = 2;
@@ -240,7 +281,8 @@ export class ArenaScene {
 
   setTorch(x: number, y: number, on: boolean) {
     this.torch.position.set(x, 1.6, y);
-    this.torch.intensity = on ? 30 : 0;
+    if (!on) this.torch.intensity = 0;
+    else if (this.torch.intensity === 0) this.torch.intensity = 28;
   }
 
   // ───────────── chests ─────────────
@@ -299,6 +341,73 @@ export class ArenaScene {
     this.arrows.push({ mesh: g, from, to, t: 0 });
   }
 
+  resetMemory() {
+    this.explored.fill(0);
+  }
+
+  /** Freeze animation for a few frames so a hit lands (hit-stop). */
+  hitStop(ms = 70) {
+    this.freezeUntil = performance.now() + ms;
+  }
+
+  /** Floating combat text ("-4", "+8 ❤"). */
+  floatText(x: number, y: number, text: string, color = "#ff5050", size = 1) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 192;
+    canvas.height = 64;
+    const ctx = canvas.getContext("2d")!;
+    ctx.font = "bold 44px Silkscreen, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = "#000";
+    ctx.strokeText(text, 96, 34);
+    ctx.fillStyle = color;
+    ctx.fillText(text, 96, 34);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+    sprite.scale.set(1.2 * size, 0.4 * size, 1);
+    sprite.position.set(x + (Math.random() - 0.5) * 0.3, 1.9, y);
+    sprite.renderOrder = 12;
+    this.scene.add(sprite);
+    this.floaters.push({ sprite, vy: 1.4, life: 1 });
+  }
+
+  /** Little puff at the feet when stepping. */
+  dust(x: number, y: number) {
+    this.burst(x, 0.08, y, 0x8a7a5a, 4);
+  }
+
+  /** Light the hearing arcs for the octants in `mask` around (x, y). */
+  setHeard(x: number, y: number, mask: number) {
+    this.heardArcs.forEach((arc, k) => {
+      arc.position.set(x, 0.06, y);
+      arc.userData.on = (mask >> k) & 1;
+    });
+  }
+
+  /** Point a ground arrow from (x, y) toward (tx, ty); null hides it. */
+  setGuide(x: number, y: number, target: { x: number; y: number } | null) {
+    this.guide.visible = !!target;
+    if (!target) return;
+    const ang = Math.atan2(target.x - x, -(target.y - y));
+    this.guide.position.set(x + Math.sin(ang) * 1.6, 0.07, y - Math.cos(ang) * 1.6);
+    this.guide.rotation.set(-Math.PI / 2, 0, -ang);
+  }
+
+  /** Screen point → map tile (null if off the ground). */
+  pickTile(clientX: number, clientY: number): { x: number; y: number } | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const hit = new THREE.Vector3();
+    if (!this.raycaster.ray.intersectPlane(this.ground, hit)) return null;
+    const x = Math.round(hit.x);
+    const y = Math.round(hit.z);
+    return x >= 0 && y >= 0 && x < MAP_W && y < MAP_H ? { x, y } : null;
+  }
+
   /** A sword hovering over the arena for the menu screens. */
   showcaseSword() {
     const s = makeSword(true);
@@ -309,10 +418,30 @@ export class ArenaScene {
   }
 
   private frame = () => {
-    const dt = Math.min(0.05, this.clock.getDelta());
+    const raw = Math.min(0.05, this.clock.getDelta());
     const t = this.clock.elapsedTime;
-    this.onFrame(dt, t);
+    // During hit-stop the world holds still for a beat; the camera and HUD keep running.
+    const dt = performance.now() < this.freezeUntil ? 0 : raw;
+    this.onFrame(raw, t);
     for (const c of this.characters.values()) c.update(dt, t);
+    this.torch.intensity = this.torch.intensity > 0 ? 28 + Math.sin(t * 11) * 1.5 + Math.sin(t * 23) * 1 : 0;
+    for (let i = this.floaters.length - 1; i >= 0; i--) {
+      const f = this.floaters[i];
+      f.life -= raw * 0.9;
+      f.sprite.position.y += f.vy * raw;
+      f.vy *= 0.94;
+      (f.sprite.material as THREE.SpriteMaterial).opacity = Math.min(1, f.life * 2);
+      if (f.life <= 0) {
+        f.sprite.removeFromParent();
+        this.floaters.splice(i, 1);
+      }
+    }
+    for (const arc of this.heardArcs) {
+      const m = arc.material as THREE.MeshBasicMaterial;
+      const target = arc.userData.on ? 0.45 + Math.sin(t * 6) * 0.25 : 0;
+      m.opacity += (target - m.opacity) * Math.min(1, raw * 8);
+    }
+    if (this.guide.visible) (this.guide.material as THREE.MeshBasicMaterial).opacity = 0.6 + Math.sin(t * 8) * 0.3;
 
     this.zoneShown += (this.zoneTarget - this.zoneShown) * (1 - Math.exp(-dt * 2));
     this.layoutBorder(this.zoneShown);

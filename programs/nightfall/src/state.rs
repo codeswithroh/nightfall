@@ -115,11 +115,14 @@ pub struct Vision {
     pub chests: [[u8; 3]; MAX_CHESTS],
     /// [shooter, x0, y0, x1, y1, seq]
     pub shots: [[u8; 6]; MAX_SHOTS],
+    /// Hearing: bit k set = an unseen enemy is somewhere in compass octant k (0 = N, clockwise).
+    /// A direction, never a position.
+    pub heard: u8,
     pub bump: u8,
 }
 
 impl Vision {
-    pub const LEN: usize = 8 + 1 + 32 + 4 + 1 + 1 + 7 + 1 + 1 + 1 + 6 * MAX_SEEN + 1 + 3 * MAX_CHESTS + 6 * MAX_SHOTS + 1;
+    pub const LEN: usize = 8 + 1 + 32 + 4 + 1 + 1 + 7 + 1 + 1 + 1 + 6 * MAX_SEEN + 1 + 3 * MAX_CHESTS + 6 * MAX_SHOTS + 1 + 1;
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]

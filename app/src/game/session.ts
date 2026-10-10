@@ -10,7 +10,7 @@ import {
   explorerAddress,
   explorerTx,
 } from "../lib/config";
-import { DX, DY, tileAt, walkable } from "../lib/map";
+import { DX, DY, MAP_W, ROWS, firstStepToward, inZone, tileAt, walkable } from "../lib/map";
 import {
   arenaPda,
   decodeName,
@@ -31,6 +31,13 @@ const MOVE_EVERY_MS = 125;
 const SWORD_EVERY_MS = 230;
 const BOW_EVERY_MS = 520;
 const CHEST_NAMES = ["", "Diamond Sword", "Golden Apple", "Quiver of Arrows"];
+const OCTANT_NAMES = ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"];
+const STREAKS = ["", "", "DOUBLE KILL", "TRIPLE KILL", "RAMPAGE", "UNSTOPPABLE"];
+const key = (k: string) => `<kbd>${k}</kbd>`;
+
+/** One-time contextual tips: each shows at most twice per browser, only when it's relevant. */
+const coachSeen = (id: string) => Number(localStorage.getItem(`nightfall-coach-${id}`) ?? "0");
+const coachMark = (id: string) => localStorage.setItem(`nightfall-coach-${id}`, String(coachSeen(id) + 1));
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const h = <T extends HTMLElement = HTMLElement>(root: HTMLElement, sel: string) => root.querySelector(sel) as T;
@@ -44,6 +51,7 @@ export interface SessionOptions {
   ui: HTMLElement;
   bots: Bot[];
   onExit: () => void;
+  onPlayAgain?: () => void;
   toast: (msg: string, err?: boolean) => void;
 }
 
@@ -74,6 +82,17 @@ export class MatchSession {
   private revealed = false;
   private latency: number[] = [];
   private shake = 0;
+  private pathTarget: { x: number; y: number } | null = null;
+  private stepsTaken = 0;
+  private coachId: string | null = null;
+  private coachTimer: ReturnType<typeof setTimeout> | undefined;
+  private myKillTimes: number[] = [];
+  private lastHeartbeat = 0;
+  private lastHeardSfx = 0;
+  private lastBeep = -1;
+  private aliveAtDeath = 0;
+  private minimap!: HTMLCanvasElement;
+  private lastSeenAt = new Map<number, { x: number; y: number; t: number }>();
 
   constructor(private o: SessionOptions) {}
 
@@ -86,6 +105,8 @@ export class MatchSession {
     (window as unknown as { __nightfall: MatchSession }).__nightfall = this;
     scene.fullReveal = false;
     scene.follow = null;
+    scene.resetMemory();
+    sfx.ambience(true);
     this.buildHud();
     scene.setViewer(-100, -100, false);
 
@@ -106,7 +127,20 @@ export class MatchSession {
       }, 2500),
     );
     this.timers.push(setInterval(() => this.renderZoneTimer(), 250));
+    this.timers.push(setInterval(() => this.drawMinimap(), 200));
+    scene.renderer.domElement.addEventListener("pointerdown", this.onPointer);
   }
+
+  /** Click / tap the ground to walk there; click an enemy to walk up and hit them. */
+  private onPointer = (e: PointerEvent) => {
+    sfx.unlock();
+    if (!this.canAct()) return;
+    const t = this.o.scene.pickTile(e.clientX, e.clientY);
+    if (!t) return;
+    this.pathTarget = t;
+    this.held = [];
+    this.o.scene.burst(t.x, 0.1, t.y, 0xffe040, 5);
+  };
 
   private get alive() {
     return !!this.vision?.me[6];
@@ -118,6 +152,11 @@ export class MatchSession {
     this.o.bots.forEach((b) => b.dispose());
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
+    this.o.scene.renderer.domElement.removeEventListener("pointerdown", this.onPointer);
+    this.o.scene.setHeard(0, 0, 0);
+    this.o.scene.setGuide(0, 0, null);
+    sfx.ambience(false);
+    clearTimeout(this.coachTimer);
     for (const c of this.o.scene.characters.values()) c.dispose();
     this.o.scene.characters.clear();
     for (const g of this.ghosts.values()) g.sprite.removeFromParent();
@@ -164,10 +203,16 @@ export class MatchSession {
             ? `${v} was shot by ${k}`
             : `${v} was slain by ${k}`;
       this.feed(line);
-      if (victim === this.o.slot) sfx.death();
-      else if (killer === this.o.slot) {
-        sfx.win();
-        this.banner("ELIMINATED", esc(this.name(victim)), 1600);
+      if (victim === this.o.slot) {
+        sfx.death();
+        this.aliveAtDeath = Array.from({ length: a.playerCount }, (_, i) => (a.alive >> i) & 1).reduce((s, b) => s + b, 0) + 1;
+      } else if (killer === this.o.slot) {
+        const now = Date.now();
+        this.myKillTimes = [...this.myKillTimes.filter((t) => now - t < 10_000), now];
+        const n = this.myKillTimes.length;
+        sfx.streak(n);
+        this.banner(n >= 2 ? STREAKS[Math.min(n, STREAKS.length - 1)] : "ELIMINATED", esc(this.name(victim)), 1800);
+        this.o.scene.hitStop(140);
       }
     }
     const alive = Array.from({ length: a.playerCount }, (_, i) => (a.alive >> i) & 1).reduce((s, b) => s + b, 0);
@@ -200,7 +245,8 @@ export class MatchSession {
       scene.scene.add(this.me.root);
       scene.characters.set(this.o.slot, this.me);
       scene.follow = this.pred;
-      this.banner("NIGHTFALL", "Find them before they find you", 2600);
+      this.banner("NIGHTFALL", "Last one standing wins. Stay inside the border.", 2600);
+      setTimeout(() => this.coach("move", `Move with ${key("W")}${key("A")}${key("S")}${key("D")} or the arrow keys. Or <b>click the ground</b> to walk there.`, 0), 2700);
       this.chat("Spawn point rolled by <b>MagicBlock VRF</b> — sealed in the TEE.");
     }
     if (!this.me) return;
@@ -217,6 +263,9 @@ export class MatchSession {
         this.me.hurt();
         sfx.hurt();
         this.shake = 0.35;
+        scene.hitStop(60);
+        scene.floatText(x, y, `-${prev.me[2] - hp}`, "#ff5050");
+        if (hp <= 6 && hp > 0) this.coach("lowhp", `❤ Low health! A <b>Golden Apple</b> chest heals +8. Or run.`, 6000);
         scene.burst(x, 0.8, y, 0xc02020, 10);
         const vig = h(this.hud, ".vignette");
         vig.style.opacity = "1";
@@ -230,8 +279,13 @@ export class MatchSession {
         }
       }
       if (weapon === 2 && prev.me[4] !== 2) this.loot(1);
-      else if (hp > prev.me[2]) this.loot(2);
-      else if (arrows > prev.me[5]) this.loot(3);
+      else if (hp > prev.me[2]) {
+        this.loot(2);
+        scene.floatText(x, y, `+${hp - prev.me[2]}`, "#60ff70");
+      } else if (arrows > prev.me[5]) {
+        this.loot(3);
+        scene.floatText(x, y, `+${arrows - prev.me[5]} ➶`, "#ffffff");
+      }
     }
     if (!alive && !this.deadShown) {
       this.deadShown = true;
@@ -253,8 +307,12 @@ export class MatchSession {
         c.place(ex, ey, efacing);
         scene.scene.add(c.root);
         scene.characters.set(slot, c);
-        if (!prev || !prev.seen.slice(0, prev.seenCount).some((s) => s[0] === slot))
+        const lastSeen = this.lastSeenAt.get(slot);
+        if (!lastSeen || performance.now() - lastSeen.t > 5000) {
           this.chat(`<span style="color:#ff9090">⚠ ${esc(this.name(slot))} spotted!</span>`);
+          sfx.spotted();
+          this.coach("fight", `⚔ Enemy! Walk up next to them and press ${key("SPACE")}. Far away in a straight line? ${key("SPACE")} shoots your bow.`, 7000);
+        }
       }
       c.target.set(ex, ey);
       c.facing = efacing;
@@ -264,7 +322,10 @@ export class MatchSession {
         c.hurt();
         sfx.hit();
         scene.burst(ex, 0.8, ey, 0xc02020, 8);
+        scene.floatText(ex, ey, `-${before - ehp}`, "#ffe040", 1.2);
+        scene.hitStop(70);
       }
+      this.lastSeenAt.set(slot, { x: ex, y: ey, t: performance.now() });
       this.enemyHp.set(slot, ehp);
       this.ghosts.get(slot)?.sprite.removeFromParent();
       this.ghosts.delete(slot);
@@ -287,6 +348,11 @@ export class MatchSession {
     }
 
     scene.setChests(v.chests.slice(0, v.chestCount).map(([cx, cy, kind]) => ({ x: cx, y: cy, kind })));
+    if (v.chestCount > 0 && alive) this.coach("chest", `✨ A glowing chest! Walk into it to loot it.`, 6000);
+    if (v.heard && alive) {
+      const ks = [0, 1, 2, 3, 4, 5, 6, 7].filter((k) => (v.heard >> k) & 1);
+      this.coach("hear", `👂 Red arcs are <b>footsteps you can't see</b>. Someone is to the ${OCTANT_NAMES[ks[0]]}.`, 6500);
+    }
     for (const s of v.shots) {
       const [shooter, x0, y0, x1, y1, seq] = s;
       if (!seq || this.seenShots.has(seq)) continue;
@@ -333,17 +399,24 @@ export class MatchSession {
     if (d >= 0) {
       e.preventDefault();
       // A tap moves right away; holding keeps walking from the frame loop.
+      this.pathTarget = null;
       if (!this.held.includes(d)) {
         this.held.unshift(d);
         if (!e.repeat) this.tryMove(d, true);
       }
       return;
     }
-    if (e.key === " " || e.key.toLowerCase() === "j") {
+    const k = e.key.toLowerCase();
+    if (e.key === " " || k === "j" || e.key === "Enter") {
       e.preventDefault();
-      this.attack(ACTION.sword);
-    } else if (e.key.toLowerCase() === "f" || e.key.toLowerCase() === "k") this.attack(ACTION.bow);
-    else if (e.key.toLowerCase() === "x") this.toggleXray();
+      this.smartAttack();
+    } else if (k === "f" || k === "k") this.attack(ACTION.bow);
+    else if (k === "x") this.toggleXray();
+    else if (k === "h" || e.key === "?") this.toggleHelp();
+    else if (e.key === "Escape") {
+      this.hud.querySelector(".help")?.remove();
+      this.hud.querySelector(".xray")?.remove();
+    }
     else if (e.key.toLowerCase() === "m") h(this.hud, "[data-mute]").textContent = sfx.toggle() ? "🔇" : "🔊";
   };
 
@@ -374,9 +447,9 @@ export class MatchSession {
       b.addEventListener("pointerleave", up);
       b.addEventListener("pointercancel", up);
     });
-    this.hud.querySelector("[data-act-sword]")?.addEventListener("pointerdown", () => this.attack(ACTION.sword));
+    this.hud.querySelector("[data-act-sword]")?.addEventListener("pointerdown", () => this.smartAttack());
     this.hud.querySelector("[data-act-bow]")?.addEventListener("pointerdown", () => this.attack(ACTION.bow));
-    this.hud.querySelector("[data-slot='0']")?.addEventListener("click", () => this.attack(ACTION.sword));
+    this.hud.querySelector("[data-slot='0']")?.addEventListener("click", () => this.smartAttack());
     this.hud.querySelector("[data-slot='1']")?.addEventListener("click", () => this.attack(ACTION.bow));
   }
 
@@ -414,8 +487,43 @@ export class MatchSession {
     if (walkable(nx, ny) && !this.enemyAt(nx, ny)) {
       this.pred.set(nx, ny);
       sfx.step();
+      this.o.scene.dust(nx, ny);
+      if (++this.stepsTaken === 5 && this.coachId === "move") this.coachDone();
     }
     this.send(ACTION.move, d);
+  }
+
+  /** SPACE: hit whoever is next to you, else shoot whoever is lined up, else swing ahead. */
+  private smartAttack() {
+    const v = this.vision;
+    if (!v || !this.canAct()) return;
+    const enemies = v.seen.slice(0, v.seenCount);
+    const { x, y } = this.pred;
+    for (let d = 0; d < 4; d++)
+      if (enemies.some((e) => e[1] === x + DX[d] && e[2] === y + DY[d])) {
+        this.facing = d;
+        return this.attack(ACTION.sword);
+      }
+    if (v.me[5] > 0)
+      for (const e of enemies) {
+        if (e[1] !== x && e[2] !== y) continue;
+        const d = e[1] === x ? (e[2] < y ? 0 : 2) : e[1] > x ? 1 : 3;
+        if (this.clearShot(x, y, d, e[1], e[2])) {
+          this.facing = d;
+          return this.attack(ACTION.bow);
+        }
+      }
+    this.attack(ACTION.sword);
+  }
+
+  private clearShot(x: number, y: number, d: number, tx: number, ty: number) {
+    for (let i = 0; i < 7; i++) {
+      x += DX[d];
+      y += DY[d];
+      if (tileAt(x, y) === 1) return false;
+      if (x === tx && y === ty) return true;
+    }
+    return false;
   }
 
   private attack(kind: number) {
@@ -463,6 +571,8 @@ export class MatchSession {
 
   private frame(dt: number) {
     if (this.held.length) this.tryMove(this.held[0]);
+    else if (this.pathTarget) this.followPath();
+    this.senses();
     if (this.me && this.alive) {
       this.me.target.copy(this.pred);
       this.me.facing = this.facing;
@@ -495,6 +605,170 @@ export class MatchSession {
       }
   }
 
+
+  /** Walk one step along the clicked path; if an enemy stands there, walk up and attack. */
+  private followPath() {
+    const t = this.pathTarget!;
+    const v = this.vision;
+    const { x, y } = this.pred;
+    const enemyThere = !!v && v.seen.slice(0, v.seenCount).some((e) => e[1] === t.x && e[2] === t.y);
+    const dist = Math.abs(t.x - x) + Math.abs(t.y - y);
+    if (dist === 0 || (enemyThere && dist === 1)) {
+      if (enemyThere) this.smartAttack();
+      this.pathTarget = null;
+      return;
+    }
+    if (Date.now() - this.lastMoveAt < MOVE_EVERY_MS) return;
+    const d = firstStepToward(
+      x,
+      y,
+      (a, b) => (enemyThere ? Math.abs(a - t.x) + Math.abs(b - t.y) === 1 : a === t.x && b === t.y),
+      (a, b) => this.enemyAt(a, b),
+    );
+    if (d < 0) {
+      this.pathTarget = null;
+      return;
+    }
+    this.tryMove(d);
+  }
+
+  /** Hearing arcs + footsteps, heartbeat at low health, border guide and countdown beeps. */
+  private senses() {
+    const v = this.vision;
+    const a = this.arena;
+    const { scene } = this.o;
+    if (!v || !a || !this.alive || a.status !== STATUS.live) {
+      scene.setHeard(0, 0, 0);
+      scene.setGuide(0, 0, null);
+      return;
+    }
+    const me = this.me?.pos ?? this.pred;
+    scene.setHeard(me.x, me.y, v.heard);
+    const now = performance.now();
+    if (v.heard && now - this.lastHeardSfx > 1300) {
+      this.lastHeardSfx = now;
+      const ks = [0, 1, 2, 3, 4, 5, 6, 7].filter((k) => (v.heard >> k) & 1);
+      const k = ks[Math.floor(Math.random() * ks.length)];
+      sfx.heard(Math.sin((k * Math.PI) / 4));
+    }
+    const hp = v.me[2];
+    if (hp > 0 && hp <= 6 && now - this.lastHeartbeat > (hp <= 3 ? 650 : 950)) {
+      this.lastHeartbeat = now;
+      sfx.heartbeat();
+      const vig = h(this.hud, ".vignette");
+      vig.style.opacity = "0.55";
+      setTimeout(() => (vig.style.opacity = "0"), 220);
+    }
+    // Guide arrow: outside the border, or about to be.
+    const elapsed = Date.now() / 1000 - a.startTs.toNumber();
+    const nextZone = elapsed < ZONE.graceSecs - 8 ? a.zone : Math.max(ZONE.min, a.zone - 1);
+    const [mx, my] = [Math.round(this.pred.x), Math.round(this.pred.y)];
+    const danger = !inZone(a.zone, mx, my) || !inZone(nextZone, mx, my);
+    scene.setGuide(me.x, me.y, danger ? { x: 11.5, y: 11.5 } : null);
+    if (danger) this.coach("border", `🧭 The border is coming for you. Follow the <b style="color:#8fd8ff">blue arrow</b> to the safe zone.`, 6000);
+    // Countdown beeps for the last 3 seconds before the border moves.
+    const untilShrink = elapsed < ZONE.graceSecs ? ZONE.graceSecs - elapsed : ZONE.shrinkSecs - ((elapsed - ZONE.graceSecs) % ZONE.shrinkSecs);
+    const sec = Math.ceil(untilShrink);
+    if (a.zone > ZONE.min && sec <= 3 && sec !== this.lastBeep) {
+      this.lastBeep = sec;
+      sfx.beep(sec === 1);
+    }
+    if (sec > 3) this.lastBeep = -1;
+  }
+
+  // ───────────── coaching (learn by doing) ─────────────
+
+  private coach(id: string, html: string, autoHideMs: number) {
+    if (this.coachId || coachSeen(id) >= 2) return;
+    coachMark(id);
+    this.coachId = id;
+    const el = h(this.hud, "[data-coach]");
+    el.innerHTML = html;
+    el.classList.add("on");
+    clearTimeout(this.coachTimer);
+    if (autoHideMs) this.coachTimer = setTimeout(() => this.coachDone(), autoHideMs);
+  }
+
+  private coachDone() {
+    this.coachId = null;
+    h(this.hud, "[data-coach]").classList.remove("on");
+  }
+
+  private toggleHelp() {
+    const existing = this.hud.querySelector(".help");
+    if (existing) return existing.remove();
+    const el = document.createElement("div");
+    el.className = "help panel";
+    el.innerHTML = `
+      <div class="label">How to play · press ${key("H")} to close</div>
+      <div class="help-grid">
+        <div>${key("W")}${key("A")}${key("S")}${key("D")} / arrows</div><div>Move · or <b>click the ground</b></div>
+        <div>${key("SPACE")}</div><div>Attack: sword if adjacent, bow if they're lined up</div>
+        <div>${key("F")}</div><div>Shoot your bow straight ahead</div>
+        <div>${key("X")}</div><div>X-ray: try to see through the fog (you can't)</div>
+        <div>${key("M")}</div><div>Mute</div>
+      </div>
+      <ul>
+        <li>You only see what your <b>torch</b> lights. So does everyone else.</li>
+        <li><b style="color:#ff6060">Red arcs</b> = footsteps you can hear but can't see.</li>
+        <li><b>Tall grass</b> hides you unless someone is right next to you.</li>
+        <li><b>Chests</b> glow: 💎 Diamond Sword (more damage) · 🍎 Golden Apple (+8 health) · ➶ Arrows.</li>
+        <li>After 40s the <b style="color:#8fd8ff">world border</b> shrinks every 8s. Outside it, you burn.</li>
+        <li>Last one standing wins the pot.</li>
+      </ul>
+      <button class="btn small" data-close>Got it</button>`;
+    this.hud.appendChild(el);
+    h(el, "[data-close]").addEventListener("click", () => el.remove());
+  }
+
+  // ───────────── minimap ─────────────
+
+  private minimapBase: HTMLCanvasElement | null = null;
+
+  private drawMinimap() {
+    const c = this.minimap;
+    const a = this.arena;
+    if (!c || !a) return;
+    const S = 5;
+    if (!this.minimapBase) {
+      const base = document.createElement("canvas");
+      base.width = base.height = MAP_W * S;
+      const b = base.getContext("2d")!;
+      ROWS.forEach((row, y) =>
+        [...row].forEach((ch, x) => {
+          b.fillStyle = ch === "T" ? "#24461b" : ch === "#" ? "#5a5a66" : ch === "~" ? "#2a4f9a" : ch === '"' ? "#3f6e2a" : "#1d2e17";
+          b.fillRect(x * S, y * S, S, S);
+        }),
+      );
+      this.minimapBase = base;
+    }
+    const ctx = c.getContext("2d")!;
+    ctx.drawImage(this.minimapBase, 0, 0);
+    // Border.
+    const lo = (11.5 - a.zone + 0.5) * S;
+    const size = (a.zone * 2) * S;
+    ctx.strokeStyle = "#8fd8ff";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(lo, lo, size, size);
+    ctx.fillStyle = "rgba(60,120,255,0.18)";
+    ctx.fillRect(0, 0, c.width, lo);
+    ctx.fillRect(0, lo + size, c.width, c.height);
+    ctx.fillRect(0, lo, lo, size);
+    ctx.fillRect(lo + size, lo, c.width, size);
+    // Last-seen enemies (fade over 6s), then me.
+    const now = performance.now();
+    for (const [, p] of this.lastSeenAt) {
+      const age = (now - p.t) / 6000;
+      if (age > 1) continue;
+      ctx.fillStyle = `rgba(255,70,70,${1 - age})`;
+      ctx.fillRect(p.x * S - 1, p.y * S - 1, S + 2, S + 2);
+    }
+    if (this.vision?.me[6]) {
+      ctx.fillStyle = "#ffe040";
+      ctx.fillRect(this.pred.x * S - 1, this.pred.y * S - 1, S + 2, S + 2);
+    }
+  }
+
   // ───────────── HUD ─────────────
 
   private buildHud() {
@@ -508,20 +782,24 @@ export class MatchSession {
         <div class="pill" data-kills></div>
         <div class="pill border-warn" data-zone>Border: —</div>
         <div class="pill muted" data-xy style="font-size:11px">XY —</div>
-        <div class="pill hide-touch muted" style="font-size:11px">WASD move · SPACE sword · F bow · X x-ray</div>
+
       </div>
       <div class="top-right">
         <div class="row">
+          <button class="btn small" data-help title="How to play (H)">?</button>
           <button class="btn small" data-xray title="Try to see through the fog (X)">🕶 X-RAY</button>
           <button class="btn small" data-mute title="Mute (M)">🔊</button>
           <button class="btn small" data-leave title="Leave">✕</button>
         </div>
+        <canvas class="minimap" data-minimap width="120" height="120" ${this.spectator ? "" : ""}></canvas>
         <div class="pill muted" data-net style="font-size:11px">TEE · devnet</div>
         <div class="feed" data-feed></div>
       </div>
       <div class="chat" data-chat></div>
       <div class="center-banner" data-banner></div>
+      <div class="coach" data-coach></div>
       <div class="bottom" ${this.spectator ? 'style="display:none"' : ""}>
+        <div class="keys hide-touch">${key("WASD")} move · ${key("SPACE")} attack · ${key("F")} bow · ${key("H")} help</div>
         <div class="hearts" data-hearts></div>
         <div class="hotbar">
           <div class="slot" data-slot="0"><span class="key">1</span><img data-sword-icon src="${ICONS.woodSword()}" alt="sword"/></div>
@@ -536,12 +814,14 @@ export class MatchSession {
         </div>
         <div class="acts">
           <button data-act-bow>BOW</button>
-          <button data-act-sword>SWORD</button>
+          <button data-act-sword>ATTACK</button>
         </div>
       </div>`;
     this.o.ui.appendChild(el);
     this.hud = el;
     h(el, "[data-xray]").addEventListener("click", () => this.toggleXray());
+    h(el, "[data-help]").addEventListener("click", () => this.toggleHelp());
+    this.minimap = h<HTMLCanvasElement>(el, "[data-minimap]");
     h(el, "[data-mute]").addEventListener("click", (e) => ((e.target as HTMLElement).textContent = sfx.toggle() ? "🔇" : "🔊"));
     h(el, "[data-leave]").addEventListener("click", () => {
       if (this.arena?.status === STATUS.live && this.alive && !confirm("Leave the match? You'll stay in the arena and the border will catch you.")) return;
@@ -666,10 +946,12 @@ export class MatchSession {
     if (this.ended || this.hud.querySelector(".dead-screen")) return;
     const el = document.createElement("div");
     el.className = "dead-screen";
-    el.innerHTML = `<h2>You died!</h2><p>Score: <b style="color:#ffcf40">${this.arena?.kills[this.o.slot] ?? 0}</b></p>
+    const place = this.aliveAtDeath || (this.arena ? this.arena.playerCount : 0);
+    el.innerHTML = `<h2>You died!</h2><p>You placed <b style="color:#ffcf40">#${place}</b> of ${this.arena?.playerCount ?? "?"} · ${this.arena?.kills[this.o.slot] ?? 0} kills</p>
       <p class="muted">Dead players see nothing until the night ends.</p>
-      <div class="row"><button class="btn" data-spec>Spectate</button><button class="btn" data-menu>Title screen</button></div>`;
+      <div class="row">${this.o.onPlayAgain ? `<button class="btn primary" data-again>▶ Play again</button>` : ""}<button class="btn" data-spec>Spectate</button><button class="btn" data-menu>Title screen</button></div>`;
     this.hud.appendChild(el);
+    el.querySelector("[data-again]")?.addEventListener("click", () => this.o.onPlayAgain?.());
     h(el, "[data-spec]").addEventListener("click", () => el.remove());
     h(el, "[data-menu]").addEventListener("click", () => this.o.onExit());
   }
@@ -694,9 +976,11 @@ export class MatchSession {
       <div class="row" style="flex-wrap:wrap;justify-content:center">
         <button class="btn primary" data-reveal>☀ Reveal the night</button>
         <button class="btn" data-settle>${pot > 0 ? "Settle & pay winner" : "Settle on Solana"}</button>
+        ${this.o.onPlayAgain ? `<button class="btn primary" data-again>▶ Play again</button>` : ""}
         <button class="btn" data-menu>Title screen</button>
       </div>`;
     this.hud.appendChild(el);
+    el.querySelector("[data-again]")?.addEventListener("click", () => this.o.onPlayAgain?.());
     const log = (s: string) => (h(el, "[data-endlog]").innerHTML += `<div>${s}</div>`);
     h(el, "[data-menu]").addEventListener("click", () => this.o.onExit());
     h<HTMLButtonElement>(el, "[data-reveal]").addEventListener("click", async (e) => {

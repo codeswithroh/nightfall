@@ -70,6 +70,8 @@ export interface VisionState {
   chestCount: number;
   chests: number[][];
   shots: number[][];
+  /** Bit k = an unseen enemy is within earshot in compass octant k (0 = N, clockwise). */
+  heard: number;
 }
 
 export interface WorldState {

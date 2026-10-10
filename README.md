@@ -16,6 +16,27 @@ created the match.
 
 ## How it plays
 
+**One click to play:** hit **▶ Quick play vs 3 bots** and you're in a match ~25 s later. No wallet popups, no setup.
+
+| Key | Does |
+| --- | --- |
+| `WASD` / arrows, or **click the ground** | Move (click-to-walk pathfinds for you) |
+| `SPACE` | Attack. Auto-aims: sword if someone's next to you, bow if they're lined up |
+| `F` | Shoot the bow straight ahead |
+| `H` | How to play · `X` X-ray · `M` mute |
+
+New players are coached in the moment, never with a wall of text: the first time you move, spot a chest, see an enemy,
+hear footsteps, or the border reaches you, a single short tip appears (each at most twice).
+
+**Game feel:** hit-stop on impact, floating damage numbers, footstep dust, camera shake, kill streaks
+(DOUBLE KILL / RAMPAGE), a heartbeat and red pulse at low health, countdown beeps before the border moves, and fully
+synthesized audio: night ambience (wind + crickets), stereo-panned footsteps, chest chimes. No audio files.
+
+**Fog of war, three ways:** what you see now (torchlight + line of sight), what you've seen before (remembered, dimmed),
+and what you **hear**. The TEE tells each player only the *compass direction* of unseen enemies within ~8 tiles.
+Red arcs pulse around you and muffled footsteps play from that side, so you know someone's out there but not where.
+A minimap shows the border, you, and fading last-seen marks.
+
 - Up to **6 players** (humans or bots) join an arena by code or link and pick one of six original blocky skins.
 - The host starts the night. **MagicBlock VRF** rolls everyone's spawn point **inside the enclave**.
 - **WASD / arrows** to move, **Space** sword, **F** bow (3 arrows), **X** opens the X-ray panel.

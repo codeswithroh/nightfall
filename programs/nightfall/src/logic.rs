@@ -6,6 +6,8 @@ pub const MAX_HP: u8 = 20;
 pub const START_ARROWS: u8 = 3;
 /// Torch radius, squared (≈4.5 tiles).
 pub const VISION_R2: i32 = 20;
+/// You can hear (but not see) enemies within ~8 tiles.
+pub const HEARING_R2: i32 = 64;
 pub const SWORD_DMG: [u8; 3] = [0, 4, 7];
 pub const BOW_DMG: u8 = 3;
 pub const BOW_RANGE: i32 = 7;
@@ -276,6 +278,24 @@ fn dist2(ax: u8, ay: u8, bx: u8, by: u8) -> i32 {
     dx * dx + dy * dy
 }
 
+/// Compass octant of a delta (y grows southward): 0 N, 1 NE, 2 E, 3 SE, 4 S, 5 SW, 6 W, 7 NW.
+pub fn octant(dx: i32, dy: i32) -> u8 {
+    // tan(22.5°) ≈ 5/12: a component under 5/12 of the other one doesn't count as a diagonal.
+    let (ax, ay) = (dx.abs() * 12, dy.abs() * 12);
+    let horiz = ay < dx.abs() * 5;
+    let vert = ax < dy.abs() * 5;
+    match (dx.signum(), dy.signum(), horiz, vert) {
+        (_, -1, _, true) | (0, -1, _, _) => 0,
+        (1, _, true, _) | (1, 0, _, _) => 2,
+        (_, 1, _, true) | (0, 1, _, _) => 4,
+        (-1, _, true, _) | (-1, 0, _, _) => 6,
+        (1, -1, _, _) => 1,
+        (1, 1, _, _) => 3,
+        (-1, 1, _, _) => 5,
+        _ => 7,
+    }
+}
+
 /// Rebuild what player `i` is allowed to see: the fog of war itself.
 pub fn compute_vision(arena: &Arena, world: &World, i: usize, v: &mut Vision) {
     v.version = v.version.wrapping_add(1);
@@ -291,6 +311,7 @@ pub fn compute_vision(arena: &Arena, world: &World, i: usize, v: &mut Vision) {
     v.chests = [[0; 3]; MAX_CHESTS];
     v.chest_count = 0;
     v.shots = [[0; 6]; MAX_SHOTS];
+    v.heard = 0;
     // The dead see nothing until the match is over.
     if !alive || !world.spawned {
         return;
@@ -306,6 +327,8 @@ pub fn compute_vision(arena: &Arena, world: &World, i: usize, v: &mut Vision) {
         if !hidden_in_grass && sees(x, y) {
             v.seen[v.seen_count as usize] = [j as u8, x, y, world.hp[j], world.facing[j], world.weapon[j]];
             v.seen_count += 1;
+        } else if dist2(mx, my, x, y) <= HEARING_R2 {
+            v.heard |= 1 << octant(x as i32 - mx as i32, y as i32 - my as i32);
         }
     }
     for c in world.chests.iter() {
@@ -388,8 +411,29 @@ mod tests {
             chest_count: 0,
             chests: [[0; 3]; MAX_CHESTS],
             shots: [[0; 6]; MAX_SHOTS],
+            heard: 0,
             bump: 0,
         }
+    }
+
+    #[test]
+    fn hearing_gives_direction_not_position() {
+        assert_eq!(octant(0, -5), 0);
+        assert_eq!(octant(4, -4), 1);
+        assert_eq!(octant(6, 1), 2);
+        assert_eq!(octant(3, 3), 3);
+        assert_eq!(octant(-1, 7), 4);
+        assert_eq!(octant(-5, 5), 5);
+        assert_eq!(octant(-7, 0), 6);
+        assert_eq!(octant(-2, -2), 7);
+        let (mut a, mut w) = (arena(2), world());
+        spawn(&mut a, &mut w, &[3u8; 32], 0);
+        // Behind the stone at (2,3): can't be seen, can be heard to the south.
+        (w.x[0], w.y[0], w.x[1], w.y[1]) = (2, 2, 2, 4);
+        let mut v = vision();
+        compute_vision(&a, &w, 0, &mut v);
+        assert_eq!(v.seen_count, 0);
+        assert_eq!(v.heard, 1 << 4);
     }
 
     #[test]

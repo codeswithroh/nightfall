@@ -50,6 +50,7 @@ pub mod nightfall {
         max_players: u8,
         name: [u8; NAME_LEN],
         skin: u8,
+        map_id: u8,
     ) -> Result<()> {
         let payer = &ctx.accounts.host;
         let sys = ctx.accounts.system_program.key();
@@ -76,11 +77,13 @@ pub mod nightfall {
         arena.winner = NONE;
         arena.zone = logic::ZONE_START;
         arena.bump = ctx.bumps.arena;
+        arena.map_id = map_id % map::MAP_COUNT as u8;
 
         let world = &mut ctx.accounts.world;
         world.arena_id = arena_id;
         world.hit_dir = [NONE; MAX_PLAYERS];
         world.bump = ctx.bumps.world;
+        world.map_id = map_id % map::MAP_COUNT as u8;
 
         init_vision(&mut ctx.accounts.vision, arena_id, 0, payer.key(), ctx.bumps.vision);
         Ok(())
@@ -247,17 +250,19 @@ pub mod nightfall {
             logic::act(arena, world, me, action, dir, clock.slot, clock.unix_timestamp).map_err(|e| match e {
                 logic::ActError::Cooldown => NightfallError::Cooldown,
                 logic::ActError::NoArrows => NightfallError::NoArrows,
+                logic::ActError::NoPower => NightfallError::NoPower,
             })?;
         }
-        refresh_visions(arena, world, ctx.remaining_accounts)
+        refresh_visions(arena, world, ctx.remaining_accounts, clock.unix_timestamp)
     }
 
     /// Advance the world border. Permissionless and idempotent; scheduled as a MagicBlock crank.
     pub fn tick<'info>(ctx: Context<'info, Tick<'info>>) -> Result<()> {
         let arena = &mut ctx.accounts.arena;
         let world = &mut ctx.accounts.world;
-        logic::tick(arena, world, Clock::get()?.unix_timestamp);
-        refresh_visions(arena, world, ctx.remaining_accounts)
+        let now = Clock::get()?.unix_timestamp;
+        logic::tick(arena, world, now);
+        refresh_visions(arena, world, ctx.remaining_accounts, now)
     }
 
     /// Schedule `tick` on the ER's own scheduler so the border closes in even if nobody moves.
@@ -360,14 +365,14 @@ fn init_vision(v: &mut Account<Vision>, arena_id: u64, slot: u8, owner: Pubkey, 
 
 /// Recompute every player's Vision. Requires exactly one Vision per player, in slot order, so
 /// nobody can blind an opponent by leaving their account out.
-fn refresh_visions(arena: &Arena, world: &World, visions: &[AccountInfo]) -> Result<()> {
+fn refresh_visions(arena: &Arena, world: &World, visions: &[AccountInfo], now: i64) -> Result<()> {
     require!(visions.len() == arena.player_count as usize, NightfallError::BadVisionList);
     for (i, acc) in visions.iter().enumerate() {
         require_keys_eq!(*acc.owner, crate::ID, NightfallError::BadAccount);
         let mut data = acc.try_borrow_mut_data()?;
         let mut v = Vision::try_deserialize(&mut &data[..])?;
         require!(v.arena_id == arena.arena_id && v.slot as usize == i, NightfallError::BadVisionList);
-        logic::compute_vision(arena, world, i, &mut v);
+        logic::compute_vision(arena, world, i, &mut v, now);
         let mut out: &mut [u8] = &mut data[..];
         v.try_serialize(&mut out)?;
     }
@@ -618,6 +623,8 @@ pub enum NightfallError {
     Cooldown,
     #[msg("Out of arrows")]
     NoArrows,
+    #[msg("No power to use (or nowhere to blink)")]
+    NoPower,
     #[msg("Vision accounts must be passed for every player in slot order")]
     BadVisionList,
     #[msg("Unexpected account")]

@@ -52,6 +52,7 @@ export interface ArenaState {
   feed: number[][];
   feedSeq: number;
   tick: number;
+  mapId: number;
 }
 
 export interface VisionState {
@@ -81,6 +82,7 @@ export interface WorldState {
   weapon: number[];
   arrows: number[];
   chests: number[][];
+  power: number[];
 }
 
 /** Minimal key-value store so the client works in the browser and in node. */
@@ -384,9 +386,9 @@ export class NightfallClient {
       .instruction();
   }
 
-  async createArena(id: BN, stakeLamports: BN, maxPlayers: number, name: string, skin: number) {
+  async createArena(id: BN, stakeLamports: BN, maxPlayers: number, name: string, skin: number, mapId = 0) {
     const create = await this.program.methods
-      .createArena(id, stakeLamports, maxPlayers, encodeName(name), skin)
+      .createArena(id, stakeLamports, maxPlayers, encodeName(name), skin, mapId)
       .accountsPartial({
         arena: arenaPda(id),
         world: worldPda(id),
@@ -459,6 +461,12 @@ export class NightfallClient {
    * entropy if the oracle is slow.
    */
   async startMatch(id: BN, log: (s: string) => void = () => {}) {
+    const n = await this.prepareMatch(id, log);
+    return this.spawnMatch(id, n, log);
+  }
+
+  /** Delegate Arena + World to the TEE and seal everything. Returns the player count. */
+  async prepareMatch(id: BN, log: (s: string) => void = () => {}): Promise<number> {
     const found = await this.fetchArena(id);
     if (!found) throw new Error("Arena not found");
     const { arena } = found;
@@ -489,6 +497,11 @@ export class NightfallClient {
     // A handful per transaction keeps us under the size limit.
     for (let i = 0; i < permIxs.length; i += 3) await this.sendEr(permIxs.slice(i, i + 3));
 
+    return n;
+  }
+
+  /** Roll spawns with VRF (falling back to enclave entropy). The match goes live here. */
+  async spawnMatch(id: BN, n: number, log: (s: string) => void = () => {}) {
     // The program refuses to spawn unless the World and every Vision are provably sealed.
     const sealProof = [worldPda(id), ...Array.from({ length: n }, (_, s) => visionPda(id, s))].map((pda) => ({
       pubkey: permissionPdaFromAccount(pda),

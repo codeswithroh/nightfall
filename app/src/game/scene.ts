@@ -1,21 +1,26 @@
 import * as THREE from "three";
-import { TEX } from "./textures";
+import { TEX, THEMES, themeTextures } from "./textures";
 import { Character, makeSword } from "./character";
-import { MAP_H, MAP_W, charAt, lineOfSight } from "../lib/map";
+import { MAP_H, MAP_W, charAt, lineOfSight, mapId as currentMapId, setMap } from "../lib/map";
 import { VISION_R2 } from "../lib/config";
 
 const mat = (map: THREE.Texture, extra: THREE.MeshLambertMaterialParameters = {}) =>
   new THREE.MeshLambertMaterial({ map, ...extra });
 
-/** Builds instanced block meshes for the static map. */
-function buildTerrain(scene: THREE.Scene) {
+/** Builds instanced block meshes for the static map, in the given arena theme. */
+function buildTerrain(theme: number) {
+  const scene = new THREE.Group();
+  const t = themeTextures(theme);
+  const glow = THEMES[theme].liquidGlow;
   const box = new THREE.BoxGeometry(1, 1, 1);
-  const grass = [TEX.grassSide(), TEX.grassSide(), TEX.grassTop(), TEX.dirt(), TEX.grassSide(), TEX.grassSide()].map((t) => mat(t));
-  const cobble = mat(TEX.cobble());
-  const log = [TEX.logSide(), TEX.logSide(), TEX.logTop(), TEX.logTop(), TEX.logSide(), TEX.logSide()].map((t) => mat(t));
-  const leaves = mat(TEX.leaves(), { alphaTest: 0.5, side: THREE.DoubleSide });
-  const water = new THREE.MeshLambertMaterial({ map: TEX.water(), transparent: true, opacity: 0.82 });
-  const dirt = mat(TEX.dirt());
+  const grass = [t.side, t.side, t.top, t.dirt, t.side, t.side].map((x) => mat(x));
+  const cobble = mat(t.wall);
+  const log = [t.logSide, t.logSide, t.logTop, t.logTop, t.logSide, t.logSide].map((x) => mat(x));
+  const leaves = mat(t.leaves, { alphaTest: 0.5, side: THREE.DoubleSide });
+  const water = glow
+    ? new THREE.MeshBasicMaterial({ map: t.liquid })
+    : new THREE.MeshLambertMaterial({ map: t.liquid, transparent: true, opacity: 0.85 });
+  const dirt = mat(t.dirt);
 
   const cells = { grass: [] as THREE.Vector3[], cobble: [] as THREE.Vector3[], log: [] as THREE.Vector3[], leaves: [] as THREE.Vector3[], water: [] as THREE.Vector3[], dirt: [] as THREE.Vector3[] };
   const tall: THREE.Vector3[] = [];
@@ -57,7 +62,7 @@ function buildTerrain(scene: THREE.Scene) {
 
   // Tall grass: two crossed quads per tile.
   const quad = new THREE.PlaneGeometry(1, 1);
-  const grassMat = new THREE.MeshLambertMaterial({ map: TEX.tallGrass(), alphaTest: 0.4, side: THREE.DoubleSide });
+  const grassMat = new THREE.MeshLambertMaterial({ map: t.plant, alphaTest: 0.4, side: THREE.DoubleSide });
   const tallMesh = new THREE.InstancedMesh(quad, grassMat, tall.length * 4);
   const m = new THREE.Matrix4();
   let i = 0;
@@ -77,11 +82,22 @@ function buildTerrain(scene: THREE.Scene) {
         );
       }
   scene.add(tallMesh);
+  // Lava glows: a few warm lights over the pools.
+  if (glow) {
+    const pools = new Map<string, THREE.Vector3>();
+    for (const w of cells.water) pools.set(`${Math.floor(w.x / 6)},${Math.floor(w.z / 6)}`, w);
+    for (const w of [...pools.values()].slice(0, 6)) {
+      const l = new THREE.PointLight(0xff6a20, 6, 5, 1.5);
+      l.position.set(w.x, 0.6, w.z);
+      scene.add(l);
+    }
+  }
+  return scene;
 }
 
 function buildSky(scene: THREE.Scene) {
   scene.background = new THREE.Color(0x05070f);
-  scene.fog = new THREE.Fog(0x05070f, 14, 34);
+  scene.fog = new THREE.Fog(0x05070f, 16, 40);
   const starGeo = new THREE.BufferGeometry();
   const pts: number[] = [];
   for (let i = 0; i < 700; i++) {
@@ -110,6 +126,12 @@ export class ArenaScene {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(50, 1, 0.1, 200);
+  private terrain: THREE.Group | null = null;
+  private ambient = new THREE.AmbientLight(0x6070a0, 0.32);
+  private moonLight = new THREE.DirectionalLight(0x9fb0ff, 0.4);
+  theme = 0;
+  /** Vision radius² used for the cosmetic fog (bigger under a Flare). */
+  viewR2 = VISION_R2;
   private torch = new THREE.PointLight(0xffb060, 30, 9, 1.6);
   private fogTex: THREE.DataTexture;
   private fogData = new Uint8Array(MAP_W * MAP_H * 4);
@@ -128,7 +150,12 @@ export class ArenaScene {
   /** When set, the camera follows this tile position. */
   follow: THREE.Vector2 | null = null;
   /** "lobby" frames the line-up of joined players up close. */
-  cameraMode: "game" | "lobby" | "overview" = "game";
+  cameraMode: "game" | "lobby" | "overview" | "hero" = "game";
+  /** Title-screen framing: the hero stands here. */
+  heroAt = new THREE.Vector2(11.5, 12);
+  private props = new THREE.Group();
+  private embers: { mesh: THREE.Mesh; vy: number; life: number }[] = [];
+  private fireLight: THREE.PointLight | null = null;
   /** When true (spectators, end screen), no fog is drawn. */
   fullReveal = false;
   private orbit = 0;
@@ -150,10 +177,8 @@ export class ArenaScene {
     container.appendChild(this.renderer.domElement);
 
     buildSky(this.scene);
-    buildTerrain(this.scene);
-
-    this.scene.add(new THREE.AmbientLight(0x6070a0, 0.32));
-    const moonLight = new THREE.DirectionalLight(0x9fb0ff, 0.4);
+    this.scene.add(this.ambient);
+    const moonLight = this.moonLight;
     moonLight.position.set(-8, 20, -6);
     moonLight.target.position.set(12, 0, 12);
     moonLight.castShadow = true;
@@ -216,9 +241,28 @@ export class ArenaScene {
     this.guide.renderOrder = 7;
     this.scene.add(this.guide);
 
+    this.setMap(currentMapId);
     this.resize();
     window.addEventListener("resize", this.resize);
     this.renderer.setAnimationLoop(this.frame);
+  }
+
+  /** Swap the arena: rebuild blocks, recolour sky, fog and light. */
+  setMap(id: number) {
+    setMap(id);
+    if (this.terrain && this.theme === id) return;
+    this.theme = id;
+    this.terrain?.removeFromParent();
+    this.terrain = buildTerrain(id);
+    this.scene.add(this.terrain);
+    const th = THEMES[id];
+    (this.scene.background as THREE.Color).setHex(th.sky);
+    (this.scene.fog as THREE.Fog).color.setHex(th.fog);
+    this.ambient.color.setHex(th.ambient[0]);
+    this.ambient.intensity = th.ambient[1];
+    this.moonLight.color.setHex(th.moon[0]);
+    this.moonLight.intensity = th.moon[1];
+    this.explored.fill(0);
   }
 
   private resize = () => {
@@ -258,10 +302,10 @@ export class ArenaScene {
         const k = ty * MAP_W + tx;
         let a = this.explored[k] ? 175 : 232;
         if (this.fullReveal) a = 0;
-        else if (alive && d2 <= VISION_R2 && lineOfSight(x, y, tx, ty)) {
+        else if (alive && d2 <= this.viewR2 && lineOfSight(x, y, tx, ty)) {
           a = Math.min(80, d2 * 3);
           this.explored[k] = 1;
-        } else if (alive && d2 <= VISION_R2 + 6) a = Math.min(a, 190);
+        } else if (alive && d2 <= this.viewR2 + 6) a = Math.min(a, 190);
         // Texture row 0 is v = 0, which the -90° X rotation puts at the south edge (y = 23).
         const j = ((MAP_H - 1 - ty) * MAP_W + tx) * 4;
         this.fogData[j] = 2;
@@ -305,7 +349,9 @@ export class ArenaScene {
       chest.castShadow = true;
       g.add(chest);
       // Faint glow so loot reads at night.
-      const glow = new THREE.PointLight(c.kind === 1 ? 0x40fff0 : c.kind === 2 ? 0xffd040 : 0xffffff, 3, 2.5);
+      // Colour hints the loot: cyan weapons, gold apples, white arrows, purple powers.
+      const tint = c.kind === 2 ? 0xffd040 : c.kind === 3 ? 0xffffff : c.kind >= 7 ? 0xb070ff : 0x40fff0;
+      const glow = new THREE.PointLight(tint, 3, 2.5);
       glow.position.y = 1;
       g.add(glow);
       g.position.set(c.x, 0, c.y);
@@ -408,6 +454,48 @@ export class ArenaScene {
     return x >= 0 && y >= 0 && x < MAP_W && y < MAP_H ? { x, y } : null;
   }
 
+  /** Campfire with flickering light and rising embers (title screen + warm-up yard). */
+  campfire(x: number, y: number) {
+    const g = new THREE.Group();
+    const logMat = new THREE.MeshLambertMaterial({ color: 0x5a3a1a });
+    for (const r of [0, Math.PI / 2]) {
+      const log = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.12, 0.14), logMat);
+      log.rotation.y = r;
+      log.position.y = 0.06;
+      g.add(log);
+    }
+    const flame = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.32, 0.22), new THREE.MeshBasicMaterial({ color: 0xffa030 }));
+    flame.position.y = 0.26;
+    const core = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.2, 0.12), new THREE.MeshBasicMaterial({ color: 0xfff0a0 }));
+    core.position.y = 0.22;
+    g.add(flame, core);
+    this.fireLight = new THREE.PointLight(0xff9a40, 14, 7, 1.4);
+    this.fireLight.position.y = 0.8;
+    g.add(this.fireLight);
+    g.position.set(x, 0, y);
+    g.userData.flame = flame;
+    this.props.add(g);
+    if (!this.props.parent) this.scene.add(this.props);
+    return g;
+  }
+
+  /** Shadowy figures with glowing eyes at the edge of the light: someone's out there. */
+  lurker(x: number, y: number, facing: number) {
+    const c = new Character(4);
+    c.place(x, y, facing);
+    c.setGhost(true);
+    this.props.add(c.root);
+    if (!this.props.parent) this.scene.add(this.props);
+    return c;
+  }
+
+  clearProps() {
+    this.props.clear();
+    this.fireLight = null;
+    for (const e of this.embers) e.mesh.removeFromParent();
+    this.embers = [];
+  }
+
   /** A sword hovering over the arena for the menu screens. */
   showcaseSword() {
     const s = makeSword(true);
@@ -442,6 +530,28 @@ export class ArenaScene {
       m.opacity += (target - m.opacity) * Math.min(1, raw * 8);
     }
     if (this.guide.visible) (this.guide.material as THREE.MeshBasicMaterial).opacity = 0.6 + Math.sin(t * 8) * 0.3;
+    if (this.fireLight) {
+      this.fireLight.intensity = 12 + Math.sin(t * 13) * 2 + Math.sin(t * 29) * 1.5;
+      const fire = this.fireLight.parent!;
+      (fire.userData.flame as THREE.Mesh).scale.y = 1 + Math.sin(t * 17) * 0.15;
+      if (Math.random() < raw * 10) {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.05), new THREE.MeshBasicMaterial({ color: Math.random() < 0.5 ? 0xffb040 : 0xff6020 }));
+        mesh.position.set(fire.position.x + (Math.random() - 0.5) * 0.3, 0.3, fire.position.z + (Math.random() - 0.5) * 0.3);
+        this.scene.add(mesh);
+        this.embers.push({ mesh, vy: 0.6 + Math.random() * 0.6, life: 1.4 });
+      }
+    }
+    for (let i = this.embers.length - 1; i >= 0; i--) {
+      const e = this.embers[i];
+      e.life -= raw;
+      e.mesh.position.y += e.vy * raw;
+      e.mesh.position.x += Math.sin(t * 3 + i) * 0.003;
+      if (e.life <= 0) {
+        e.mesh.removeFromParent();
+        this.embers.splice(i, 1);
+      }
+    }
+    for (const c of this.props.children) if (c.userData.character) (c.userData.character as Character).update(dt, t);
 
     this.zoneShown += (this.zoneTarget - this.zoneShown) * (1 - Math.exp(-dt * 2));
     this.layoutBorder(this.zoneShown);
@@ -480,6 +590,15 @@ export class ArenaScene {
       // Steep enough that two-block walls and trees never hide the player behind them.
       this.camera.position.set(this.camTarget.x, portrait ? 15 : 12, this.camTarget.z + (portrait ? 6.5 : 6.2));
       this.camera.lookAt(this.camTarget.x, 0, this.camTarget.z + 0.3);
+    } else if (this.cameraMode === "hero") {
+      // Low, close, slowly breathing shot of the hero by the fire.
+      const h = this.heroAt;
+      const portrait = this.camera.aspect < 1;
+      const sway = Math.sin(t * 0.18) * 0.6;
+      this.camera.position.set(h.x + 0.4 + sway, portrait ? 3.4 : 2.7, h.y + (portrait ? 7.4 : 4.8));
+      // In portrait the UI fills the bottom half, so aim low to lift the hero into the top half.
+      if (portrait) this.camera.lookAt(h.x, -1.4, h.y + 1.3);
+      else this.camera.lookAt(h.x + 0.2, 0.95, h.y);
     } else if (this.cameraMode === "overview") {
       // Whole arena from above, slowly drifting: for the post-match reveal.
       this.orbit += dt * 0.05;

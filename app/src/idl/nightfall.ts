@@ -292,6 +292,10 @@ export type Nightfall = {
         {
           "name": "skin",
           "type": "u8"
+        },
+        {
+          "name": "mapId",
+          "type": "u8"
         }
       ]
     },
@@ -1332,31 +1336,36 @@ export type Nightfall = {
     },
     {
       "code": 6011,
+      "name": "noPower",
+      "msg": "No power to use (or nowhere to blink)"
+    },
+    {
+      "code": 6012,
       "name": "badVisionList",
       "msg": "Vision accounts must be passed for every player in slot order"
     },
     {
-      "code": 6012,
+      "code": 6013,
       "name": "badAccount",
       "msg": "Unexpected account"
     },
     {
-      "code": 6013,
+      "code": 6014,
       "name": "notEnded",
       "msg": "Match has not ended"
     },
     {
-      "code": 6014,
+      "code": 6015,
       "name": "noWinner",
       "msg": "No winner recorded"
     },
     {
-      "code": 6015,
+      "code": 6016,
       "name": "notWinner",
       "msg": "That is not the winner"
     },
     {
-      "code": 6016,
+      "code": 6017,
       "name": "notSealed",
       "msg": "World and every Vision must be sealed inside the TEE before spawning"
     }
@@ -1536,6 +1545,13 @@ export type Nightfall = {
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "mapId",
+            "docs": [
+              "Which arena map (see map.rs)."
+            ],
+            "type": "u8"
           }
         ]
       }
@@ -1575,12 +1591,12 @@ export type Nightfall = {
           {
             "name": "me",
             "docs": [
-              "[x, y, hp, facing, weapon, arrows, alive]"
+              "[x, y, hp, facing, weapon, arrows, alive, power, cloak secs left, flare secs left]"
             ],
             "type": {
               "array": [
                 "u8",
-                7
+                10
               ]
             }
           },
@@ -1630,7 +1646,7 @@ export type Nightfall = {
                     3
                   ]
                 },
-                6
+                10
               ]
             }
           },
@@ -1717,7 +1733,7 @@ export type Nightfall = {
           {
             "name": "weapon",
             "docs": [
-              "1 wooden sword, 2 diamond sword"
+              "1 wooden sword, 2 diamond sword, 3 battle axe, 4 war hammer, 5 spear"
             ],
             "type": {
               "array": [
@@ -1775,7 +1791,7 @@ export type Nightfall = {
                     4
                   ]
                 },
-                6
+                10
               ]
             }
           },
@@ -1807,6 +1823,40 @@ export type Nightfall = {
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "mapId",
+            "type": "u8"
+          },
+          {
+            "name": "power",
+            "docs": [
+              "Held superpower (chest kind 7 pearl, 8 cloak, 9 flare; 0 none)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                6
+              ]
+            }
+          },
+          {
+            "name": "cloakUntil",
+            "type": {
+              "array": [
+                "i64",
+                6
+              ]
+            }
+          },
+          {
+            "name": "flareUntil",
+            "type": {
+              "array": [
+                "i64",
+                6
+              ]
+            }
           }
         ]
       }

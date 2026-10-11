@@ -25,6 +25,20 @@ export const SKINS: Skin[] = [
   { name: "Rose", tone: "#f2b896", hair: "#6a3a1e", eyes: "#4a2a5a", shirt: "#e87aa8", accent: "#ffffff", pants: "#6a3a7a", shoes: "#3a1a3a" },
 ];
 
+/** Cosmetics are packed into the onchain skin byte: base + 6·hat + 30·cape (max 209). */
+export const HATS = ["No hat", "Crown", "Horns", "Halo", "Wizard Hat"];
+export const CAPES: { name: string; color: string | null }[] = [
+  { name: "No cape", color: null },
+  { name: "Crimson cape", color: "#b02a2a" },
+  { name: "Royal cape", color: "#2a4ab0" },
+  { name: "Forest cape", color: "#2a7a3a" },
+  { name: "Golden cape", color: "#d8a820" },
+  { name: "Void cape", color: "#5a2a90" },
+  { name: "Shadow cape", color: "#1a1a22" },
+];
+export const packLook = (base: number, hat: number, cape: number) => (base % 6) + 6 * (hat % HATS.length) + 30 * (cape % CAPES.length);
+export const unpackLook = (skin: number) => ({ base: skin % 6, hat: Math.floor(skin / 6) % HATS.length, cape: Math.floor(skin / 30) % CAPES.length });
+
 type Face = "px" | "nx" | "py" | "ny" | "pz" | "nz";
 const FACES: Face[] = ["px", "nx", "py", "ny", "pz", "nz"];
 type Part = "head" | "body" | "armR" | "armL" | "legR" | "legL";
@@ -187,6 +201,12 @@ const voxelItem = (rows: string[], palette: Record<string, string>, scale = U * 
 const SWORD_ROWS = ["        BE", "       BEB", "      BEB ", "     BEB  ", "    BEB   ", "HH BEB    ", " HHEB     ", "  HH      ", " H HH     ", "H         "];
 export const makeSword = (diamond: boolean) =>
   voxelItem(SWORD_ROWS, diamond ? { B: "#2fc6c0", E: "#9ef5f0", H: "#5a3a16" } : { B: "#9c7a48", E: "#c9a46a", H: "#4a3520" });
+const AXE_ROWS = ["   SSS", "  SSSS", "  SSSH", "   SH ", "    H ", "   H  ", "  H   ", " H    ", "H     "];
+const HAMMER_ROWS = [" GGGG", " GDDG", " GGGG", "   H ", "  H  ", "  H  ", " H   ", " H   ", "H    "];
+const SPEAR_ROWS = ["       W", "      WS", "     SW ", "    H   ", "   H    ", "  H     ", " H      ", "H       "];
+export const makeAxe = () => voxelItem(AXE_ROWS, { S: "#c9d4dc", H: "#6b4d2c" });
+export const makeHammer = () => voxelItem(HAMMER_ROWS, { G: "#8a8f99", D: "#5a5f69", H: "#6b4d2c" });
+export const makeSpear = () => voxelItem(SPEAR_ROWS, { W: "#ffffff", S: "#dfe7ef", H: "#8a6a3a" });
 export const makeBow = () =>
   voxelItem(["   WW", "  W S", " W  S", "W   S", "W   S", " W  S", "  W S", "   WW"], { W: "#7a5a34", S: "#e0e0e0" });
 
@@ -198,8 +218,7 @@ export class Character {
   private armL: THREE.Group;
   private legR: THREE.Group;
   private legL: THREE.Group;
-  private sword: THREE.Group;
-  private diamondSword: THREE.Group;
+  private weapons: THREE.Group[] = [];
   private bow: THREE.Group;
   private tag: THREE.Sprite | null = null;
   private walkPhase = 0;
@@ -241,20 +260,23 @@ export class Character {
     this.head.position.y = 28 * U;
     this.body.add(this.legR, this.legL, torso, this.armR, this.armL, this.head);
 
-    this.sword = makeSword(false);
-    this.diamondSword = makeSword(true);
-    for (const s of [this.sword, this.diamondSword]) {
-      s.position.set(0, -12 * U, 3 * U);
-      s.rotation.set(-Math.PI / 2, Math.PI / 2, 0);
-      this.armR.add(s);
+    // Index = weapon id: 1 wooden sword, 2 diamond sword, 3 axe, 4 hammer, 5 spear.
+    this.weapons = [new THREE.Group(), makeSword(false), makeSword(true), makeAxe(), makeHammer(), makeSpear()];
+    for (const w of this.weapons) {
+      w.position.set(0, -12 * U, 3 * U);
+      w.rotation.set(-Math.PI / 2, Math.PI / 2, 0);
+      w.visible = false;
+      this.armR.add(w);
     }
-    this.diamondSword.visible = false;
+    this.weapons[1].visible = true;
+    this.addCosmetics(unpackLook(skin));
     this.bow = makeBow();
     this.bow.position.set(0, -12 * U, 2 * U);
     this.bow.rotation.set(-Math.PI / 2, 0, Math.PI / 2);
     this.bow.visible = false;
     this.armL.add(this.bow);
 
+    this.root.userData.character = this;
     this.root.add(this.body);
     // Characters read better a touch larger than one block wide.
     this.body.scale.setScalar(1.3);
@@ -282,8 +304,72 @@ export class Character {
   }
 
   setWeapon(weapon: number) {
-    this.sword.visible = weapon !== 2;
-    this.diamondSword.visible = weapon === 2;
+    const w = weapon >= 1 && weapon < this.weapons.length ? weapon : 1;
+    this.weapons.forEach((g, i) => (g.visible = i === w));
+  }
+
+  /** Fade for the Cloak power (only you ever see yourself cloaked). */
+  setGhost(on: boolean) {
+    for (const m of this.mats) {
+      m.transparent = on;
+      m.opacity = on ? 0.35 : 1;
+    }
+  }
+
+  private addCosmetics({ hat, cape }: { hat: number; cape: number }) {
+    const box = (w: number, h: number, d: number, color: string, emissive = 0) => {
+      const m = new THREE.MeshLambertMaterial({ color, emissive: new THREE.Color(emissive) });
+      this.mats.push(m);
+      return new THREE.Mesh(new THREE.BoxGeometry(w * U, h * U, d * U), m);
+    };
+    const top = 32 * U;
+    if (hat === 1) {
+      // Crown: a gold band with four points.
+      const band = box(9, 2, 9, "#f0c840");
+      band.position.y = top + U;
+      this.body.add(band);
+      for (const [x, z] of [[-3.5, -3.5], [3.5, -3.5], [-3.5, 3.5], [3.5, 3.5]]) {
+        const p = box(2, 2, 2, "#ffd84a");
+        p.position.set(x * U, top + 3 * U, z * U);
+        this.body.add(p);
+      }
+      const gem = box(1.6, 1.6, 0.6, "#e0304a", 0x400010);
+      gem.position.set(0, top + U, 4.6 * U);
+      this.body.add(gem);
+    } else if (hat === 2) {
+      for (const side of [-1, 1]) {
+        const a = box(2, 3, 2, "#e8e0d0");
+        a.position.set(side * 4.5 * U, top + 0.5 * U, 0);
+        const b = box(2, 2, 2, "#c8c0b0");
+        b.position.set(side * 5.5 * U, top + 3 * U, 0);
+        this.body.add(a, b);
+      }
+    } else if (hat === 3) {
+      const halo = new THREE.Mesh(
+        new THREE.TorusGeometry(4.5 * U, 0.7 * U, 6, 16),
+        new THREE.MeshBasicMaterial({ color: 0xfff2a0 }),
+      );
+      halo.rotation.x = Math.PI / 2;
+      halo.position.y = top + 3.5 * U;
+      this.body.add(halo);
+    } else if (hat === 4) {
+      const brim = box(12, 1, 12, "#3a2a7a");
+      brim.position.y = top + 0.5 * U;
+      const cone1 = box(7, 4, 7, "#4a3a9a");
+      cone1.position.y = top + 3 * U;
+      const cone2 = box(4, 4, 4, "#5a4aaa");
+      cone2.position.set(U, top + 7 * U, -U);
+      const star = box(1.5, 1.5, 0.5, "#ffe060", 0x403000);
+      star.position.set(0, top + 3 * U, 3.6 * U);
+      this.body.add(brim, cone1, cone2, star);
+    }
+    const capeColor = CAPES[cape]?.color;
+    if (capeColor) {
+      const c = box(8, 14, 1, capeColor);
+      c.position.set(0, 18 * U, -2.6 * U);
+      c.rotation.x = 0.12;
+      this.body.add(c);
+    }
   }
 
   swing() {

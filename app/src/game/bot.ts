@@ -47,6 +47,15 @@ export class Bot {
     let action: number = ACTION.move;
     let dir = -1;
 
+    // Powers: flare toward sounds, slip away (cloak / pearl) when hurt and in a fight.
+    const power = v.me[7];
+    const hp = v.me[2];
+    if (power === 9 && v.heard && !enemies.length) return void this.client.act(this.arenaId, this.playerCount, ACTION.power, 0).catch(() => {});
+    if ((power === 8 || power === 7) && hp <= 8 && enemies.length) {
+      const e = enemies[0];
+      const away = Math.abs(e.x - mx) > Math.abs(e.y - my) ? (e.x > mx ? 3 : 1) : e.y > my ? 0 : 2;
+      return void this.client.act(this.arenaId, this.playerCount, ACTION.power, away).catch(() => {});
+    }
     // Bots hesitate sometimes, so a quick human can win the exchange.
     const hesitate = Math.random() < (this.difficulty === "easy" ? 0.35 : 0.18);
     // Easy bots spend the opening looting and exploring instead of hunting.

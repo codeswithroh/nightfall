@@ -278,3 +278,200 @@ export const ICONS = {
       );
     }),
 };
+
+// ───────────── arena themes ─────────────
+
+export interface Theme {
+  name: string;
+  blurb: string;
+  top: string;
+  dirt: string;
+  wall: string;
+  wallStyle: "cobble" | "bricks";
+  log: string;
+  logStyle: "bark" | "columns";
+  leaves: string;
+  leafSpeck?: string;
+  plant: string;
+  liquid: string;
+  liquidGlow: boolean;
+  sky: number;
+  fog: number;
+  ambient: [number, number];
+  moon: [number, number];
+  /** Accent for UI cards. */
+  accent: string;
+}
+
+export const THEMES: Theme[] = [
+  {
+    name: "Moonlit Woods",
+    blurb: "Classic forest. Tall grass to hide in, ponds to break sightlines.",
+    top: "#5d9e3a", dirt: "#86603e", wall: "#7d7d7d", wallStyle: "cobble", log: "#6b4d2c", logStyle: "bark",
+    leaves: "#3f7d2a", plant: "#6aa840", liquid: "#2f5fbf", liquidGlow: false,
+    sky: 0x05070f, fog: 0x05070f, ambient: [0x6070a0, 0.32], moon: [0x9fb0ff, 0.4], accent: "#6fe36f",
+  },
+  {
+    name: "Frostpeak Ruins",
+    blurb: "Open snowfields and frozen lakes. Long sightlines: bring a bow.",
+    top: "#e9f0f7", dirt: "#7a6a5a", wall: "#9cc8e8", wallStyle: "bricks", log: "#3e2a1a", logStyle: "bark",
+    leaves: "#24432f", leafSpeck: "#f4f8ff", plant: "#b8d8d0", liquid: "#a8e0ff", liquidGlow: false,
+    sky: 0x07101a, fog: 0x0a1622, ambient: [0x8aa0c8, 0.42], moon: [0xc8dcff, 0.5], accent: "#9fe0ff",
+  },
+  {
+    name: "Ember Keep",
+    blurb: "A burning maze of corridors and lava. Close quarters, sudden ambushes.",
+    top: "#6b2222", dirt: "#4a1616", wall: "#3a1416", wallStyle: "bricks", log: "#3b3b40", logStyle: "columns",
+    leaves: "#9a1c26", plant: "#c03040", liquid: "#ff7a1a", liquidGlow: true,
+    sky: 0x120406, fog: 0x1a0606, ambient: [0xa06050, 0.38], moon: [0xff9070, 0.35], accent: "#ff8a3a",
+  },
+];
+
+const bricks = (c: CanvasRenderingContext2D, r: () => number, s: number, base: string) => {
+  noise(c, r, s, base, 0.05);
+  const mortar = shade(base, -0.18);
+  for (let row = 0; row < 4; row++) {
+    px(c, 0, row * 4 + 3, mortar, s, 1);
+    const off = row % 2 ? 4 : 0;
+    for (let x = off; x < s; x += 8) px(c, x, row * 4, mortar, 1, 3);
+  }
+};
+
+/** The block textures for one arena theme (cached per theme). */
+export const themeTextures = (id: number) => {
+  const t = THEMES[id % THEMES.length];
+  const k = (n: string) => `${t.name}-${n}`;
+  return {
+    top: makeTexture(k("top"), (c, r, s) => noise(c, r, s, t.top, 0.06), 16, 31 + id),
+    side: makeTexture(
+      k("side"),
+      (c, r, s) => {
+        noise(c, r, s, t.dirt, 0.07);
+        for (let x = 0; x < s; x++) {
+          const depth = 3 + Math.floor(r() * 3);
+          for (let y = 0; y < depth; y++) px(c, x, y, shade(t.top, (r() - 0.5) * 0.12));
+        }
+      },
+      16,
+      32 + id,
+    ),
+    dirt: makeTexture(k("dirt"), (c, r, s) => noise(c, r, s, t.dirt, 0.08), 16, 33 + id),
+    wall:
+      t.wallStyle === "cobble"
+        ? TEX.cobble()
+        : makeTexture(k("wall"), (c, r, s) => bricks(c, r, s, t.wall), 16, 34 + id),
+    logSide: makeTexture(
+      k("logSide"),
+      (c, r, s) => {
+        for (let x = 0; x < s; x++) {
+          const col = t.logStyle === "columns" ? (x % 5 === 0 ? shade(t.log, -0.1) : shade(t.log, 0.06)) : x % 4 === 0 ? shade(t.log, -0.12) : t.log;
+          for (let y = 0; y < s; y++) px(c, x, y, shade(col, (r() - 0.5) * 0.1));
+        }
+      },
+      16,
+      35 + id,
+    ),
+    logTop: makeTexture(
+      k("logTop"),
+      (c, r, s) => {
+        noise(c, r, s, shade(t.log, 0.15), 0.05);
+        c.strokeStyle = shade(t.log, -0.1);
+        for (let q = 2; q < 8; q += 2) c.strokeRect(8 - q, 8 - q, q * 2, q * 2);
+      },
+      16,
+      36 + id,
+    ),
+    leaves: makeTexture(
+      k("leaves"),
+      (c, r, s) => {
+        for (let y = 0; y < s; y++)
+          for (let x = 0; x < s; x++) {
+            const v = r();
+            px(c, x, y, v < 0.12 ? "rgba(0,0,0,0)" : t.leafSpeck && v > 0.9 ? t.leafSpeck : shade(t.leaves, (v - 0.5) * 0.25));
+          }
+      },
+      16,
+      37 + id,
+    ),
+    plant: makeTexture(
+      k("plant"),
+      (c, r, s) => {
+        c.clearRect(0, 0, s, s);
+        for (let b = 0; b < 9; b++) {
+          let x = 1 + Math.floor(r() * (s - 2));
+          const h = 6 + Math.floor(r() * 9);
+          const col = shade(t.plant, (r() - 0.5) * 0.2);
+          for (let y = s - 1; y > s - h; y--) {
+            px(c, x, y, col);
+            if (r() < 0.2) x += r() < 0.5 ? -1 : 1;
+            x = Math.max(0, Math.min(s - 1, x));
+          }
+        }
+      },
+      16,
+      38 + id,
+    ),
+    liquid: makeTexture(
+      k("liquid"),
+      (c, r, s) => {
+        noise(c, r, s, t.liquid, t.liquidGlow ? 0.1 : 0.05);
+        for (let i = 0; i < 6; i++) px(c, Math.floor(r() * s), Math.floor(r() * s), shade(t.liquid, t.liquidGlow ? 0.15 : 0.12), 3, 1);
+      },
+      16,
+      39 + id,
+    ),
+  };
+};
+
+/** Pixel icons for the new loot. */
+export const LOOT_ICONS = {
+  axe: () =>
+    icon("axe", (c) => {
+      for (let i = 0; i < 10; i++) px(c, 3 + i, 13 - i, "#6b4d2c");
+      [[9, 2], [10, 2], [11, 2], [8, 3], [9, 3], [10, 3], [11, 3], [12, 3], [8, 4], [9, 4], [10, 4], [11, 4], [12, 4], [9, 5], [10, 5], [11, 5], [12, 6]].forEach(([x, y]) => px(c, x, y, "#c9d4dc"));
+      px(c, 12, 4, "#ffffff");
+    }),
+  hammer: () =>
+    icon("hammer", (c) => {
+      for (let i = 0; i < 10; i++) px(c, 3 + i, 13 - i, "#6b4d2c");
+      px(c, 8, 1, "#8a8f99", 7, 5);
+      px(c, 8, 1, "#b6bcc8", 7, 1);
+      px(c, 9, 3, "#5a5f69", 5, 1);
+    }),
+  spear: () =>
+    icon("spear", (c) => {
+      for (let i = 0; i < 12; i++) px(c, 2 + i, 14 - i, "#8a6a3a");
+      px(c, 12, 1, "#dfe7ef", 3, 3);
+      px(c, 13, 0, "#ffffff", 2, 1);
+    }),
+  pearl: () =>
+    icon("pearl", (c) => {
+      c.fillStyle = "#1d6e64";
+      c.beginPath();
+      c.arc(8, 8, 6, 0, Math.PI * 2);
+      c.fill();
+      px(c, 6, 5, "#5fe0c8", 4, 4);
+      px(c, 7, 6, "#cffff4", 2, 2);
+    }),
+  cloak: () =>
+    icon("cloak", (c) => {
+      c.fillStyle = "#6a4aa8";
+      c.beginPath();
+      c.moveTo(8, 2);
+      c.lineTo(14, 14);
+      c.lineTo(2, 14);
+      c.closePath();
+      c.fill();
+      px(c, 6, 6, "#1a1030", 4, 3);
+      px(c, 6, 7, "#c080ff", 1, 1);
+      px(c, 9, 7, "#c080ff", 1, 1);
+    }),
+  flare: () =>
+    icon("flare", (c) => {
+      px(c, 7, 6, "#c33", 2, 8);
+      px(c, 6, 3, "#ffd84a", 4, 4);
+      px(c, 7, 2, "#fff6c0", 2, 2);
+      px(c, 5, 4, "#ff8a2a", 1, 2);
+      px(c, 10, 4, "#ff8a2a", 1, 2);
+    }),
+};

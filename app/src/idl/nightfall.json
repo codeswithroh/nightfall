@@ -286,6 +286,10 @@
         {
           "name": "skin",
           "type": "u8"
+        },
+        {
+          "name": "map_id",
+          "type": "u8"
         }
       ]
     },
@@ -1326,31 +1330,36 @@
     },
     {
       "code": 6011,
+      "name": "NoPower",
+      "msg": "No power to use (or nowhere to blink)"
+    },
+    {
+      "code": 6012,
       "name": "BadVisionList",
       "msg": "Vision accounts must be passed for every player in slot order"
     },
     {
-      "code": 6012,
+      "code": 6013,
       "name": "BadAccount",
       "msg": "Unexpected account"
     },
     {
-      "code": 6013,
+      "code": 6014,
       "name": "NotEnded",
       "msg": "Match has not ended"
     },
     {
-      "code": 6014,
+      "code": 6015,
       "name": "NoWinner",
       "msg": "No winner recorded"
     },
     {
-      "code": 6015,
+      "code": 6016,
       "name": "NotWinner",
       "msg": "That is not the winner"
     },
     {
-      "code": 6016,
+      "code": 6017,
       "name": "NotSealed",
       "msg": "World and every Vision must be sealed inside the TEE before spawning"
     }
@@ -1530,6 +1539,13 @@
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "map_id",
+            "docs": [
+              "Which arena map (see map.rs)."
+            ],
+            "type": "u8"
           }
         ]
       }
@@ -1569,12 +1585,12 @@
           {
             "name": "me",
             "docs": [
-              "[x, y, hp, facing, weapon, arrows, alive]"
+              "[x, y, hp, facing, weapon, arrows, alive, power, cloak secs left, flare secs left]"
             ],
             "type": {
               "array": [
                 "u8",
-                7
+                10
               ]
             }
           },
@@ -1624,7 +1640,7 @@
                     3
                   ]
                 },
-                6
+                10
               ]
             }
           },
@@ -1711,7 +1727,7 @@
           {
             "name": "weapon",
             "docs": [
-              "1 wooden sword, 2 diamond sword"
+              "1 wooden sword, 2 diamond sword, 3 battle axe, 4 war hammer, 5 spear"
             ],
             "type": {
               "array": [
@@ -1769,7 +1785,7 @@
                     4
                   ]
                 },
-                6
+                10
               ]
             }
           },
@@ -1801,6 +1817,40 @@
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "map_id",
+            "type": "u8"
+          },
+          {
+            "name": "power",
+            "docs": [
+              "Held superpower (chest kind 7 pearl, 8 cloak, 9 flare; 0 none)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                6
+              ]
+            }
+          },
+          {
+            "name": "cloak_until",
+            "type": {
+              "array": [
+                "i64",
+                6
+              ]
+            }
+          },
+          {
+            "name": "flare_until",
+            "type": {
+              "array": [
+                "i64",
+                6
+              ]
+            }
           }
         ]
       }

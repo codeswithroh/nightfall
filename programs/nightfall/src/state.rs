@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 pub const MAX_PLAYERS: usize = 6;
 pub const NAME_LEN: usize = 12;
-pub const MAX_CHESTS: usize = 6;
+pub const MAX_CHESTS: usize = 10;
 pub const MAX_SEEN: usize = 5;
 pub const MAX_SHOTS: usize = 4;
 pub const FEED_LEN: usize = 5;
@@ -41,6 +41,8 @@ pub struct Arena {
     pub feed_seq: u16,
     pub tick: u32,
     pub bump: u8,
+    /// Which arena map (see map.rs).
+    pub map_id: u8,
 }
 
 impl Arena {
@@ -56,6 +58,7 @@ impl Arena {
         + 3 * FEED_LEN
         + 2
         + 4
+        + 1
         + 1;
 
     pub fn alive_count(&self) -> u8 {
@@ -75,7 +78,7 @@ pub struct World {
     pub y: [u8; MAX_PLAYERS],
     pub hp: [u8; MAX_PLAYERS],
     pub facing: [u8; MAX_PLAYERS],
-    /// 1 wooden sword, 2 diamond sword
+    /// 1 wooden sword, 2 diamond sword, 3 battle axe, 4 war hammer, 5 spear
     pub weapon: [u8; MAX_PLAYERS],
     pub arrows: [u8; MAX_PLAYERS],
     pub hit_dir: [u8; MAX_PLAYERS],
@@ -88,10 +91,16 @@ pub struct World {
     pub shot_seq: u8,
     pub spawned: bool,
     pub bump: u8,
+    pub map_id: u8,
+    /// Held superpower (chest kind 7 pearl, 8 cloak, 9 flare; 0 none).
+    pub power: [u8; MAX_PLAYERS],
+    pub cloak_until: [i64; MAX_PLAYERS],
+    pub flare_until: [i64; MAX_PLAYERS],
 }
 
 impl World {
-    pub const LEN: usize = 8 + MAX_PLAYERS * 8 + 8 * MAX_PLAYERS + 4 * MAX_CHESTS + 6 * MAX_SHOTS + 1 + 1 + 1;
+    pub const LEN: usize =
+        8 + MAX_PLAYERS * 8 + 8 * MAX_PLAYERS + 4 * MAX_CHESTS + 6 * MAX_SHOTS + 1 + 1 + 1 + 1 + MAX_PLAYERS + 16 * MAX_PLAYERS;
 }
 
 /// What one player is allowed to know. Readable only by that player's wallet.
@@ -103,8 +112,8 @@ pub struct Vision {
     pub version: u32,
     pub status: u8,
     pub zone: u8,
-    /// [x, y, hp, facing, weapon, arrows, alive]
-    pub me: [u8; 7],
+    /// [x, y, hp, facing, weapon, arrows, alive, power, cloak secs left, flare secs left]
+    pub me: [u8; 10],
     pub hit_dir: u8,
     pub hit_seq: u8,
     pub seen_count: u8,
@@ -122,7 +131,7 @@ pub struct Vision {
 }
 
 impl Vision {
-    pub const LEN: usize = 8 + 1 + 32 + 4 + 1 + 1 + 7 + 1 + 1 + 1 + 6 * MAX_SEEN + 1 + 3 * MAX_CHESTS + 6 * MAX_SHOTS + 1 + 1;
+    pub const LEN: usize = 8 + 1 + 32 + 4 + 1 + 1 + 10 + 1 + 1 + 1 + 6 * MAX_SEEN + 1 + 3 * MAX_CHESTS + 6 * MAX_SHOTS + 1 + 1;
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]

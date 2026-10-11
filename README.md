@@ -16,13 +16,36 @@ created the match.
 
 ## How it plays
 
-**One click to play:** hit **▶ Quick play vs 3 bots** and you're in a match ~25 s later. No wallet popups, no setup.
+**One click to play:** hit **▶ PLAY**. While the arena is set up onchain (~15 s) you're dropped into a **warm-up yard**
+by a campfire with a training dummy: four tiny quests (walk, hit, shoot, blink) teach every control by doing it, and
+the onchain steps tick off beside you. When the night is ready, *you* choose to drop in. The match only goes live
+(VRF spawns) at that moment, so you never lose time.
+
+**Your hero, your arena:** pick a skin, hat (crown, horns, halo, wizard hat) and cape on the title screen. They're
+packed into the same onchain skin byte everyone sees. Choose between three arenas: **Moonlit Woods** (tall grass and
+ponds), **Frostpeak Ruins** (open snowfields, long bow lines) and **Ember Keep** (a lava maze for close-quarters ambushes).
+
+**Loot that changes how you fight** (all resolved inside the TEE):
+
+| Chest | Effect |
+| --- | --- |
+| Diamond Sword | 6 damage, quick |
+| Battle Axe | 9 damage, slow swing |
+| War Hammer | 5 damage, knocks the target back 2 tiles |
+| Spear | 5 damage from **2 tiles** away |
+| Golden Apple / Quiver | +8 health / +4 arrows |
+| **Ender Pearl** (`E`) | Blink 3 tiles ahead, straight over walls |
+| **Cloak** (`E`) | Invisible *and silent* for 8 s; attacking breaks it |
+| **Flare** (`E`) | See twice as far for 8 s, even into tall grass |
+
+Players get 10 s of spawn protection, and the four corners fill first so nobody spawns next to an enemy.
 
 | Key | Does |
 | --- | --- |
 | `WASD` / arrows, or **click the ground** | Move (click-to-walk pathfinds for you) |
 | `SPACE` | Attack. Auto-aims: sword if someone's next to you, bow if they're lined up |
 | `F` | Shoot the bow straight ahead |
+| `E` | Use your power |
 | `H` | How to play · `X` X-ray · `M` mute |
 
 New players are coached in the moment, never with a wall of text: the first time you move, spot a chest, see an enemy,

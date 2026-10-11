@@ -2,9 +2,27 @@ import mapJson from "./map.json";
 
 export const MAP_W = 24;
 export const MAP_H = 24;
-export const ROWS: string[] = mapJson.rows;
-export const SPAWNS: [number, number][] = mapJson.spawns as [number, number][];
-export const CHEST_SPOTS: [number, number][] = mapJson.chests as [number, number][];
+
+export interface MapInfo {
+  name: string;
+  rows: string[];
+  spawns: [number, number][];
+  chests: [number, number][];
+}
+export const MAPS: MapInfo[] = mapJson.maps as MapInfo[];
+
+/** The map currently being played or shown. Everything below reads it. */
+export let mapId = 0;
+export let ROWS: string[] = MAPS[0].rows;
+export let SPAWNS: [number, number][] = MAPS[0].spawns;
+export let CHEST_SPOTS: [number, number][] = MAPS[0].chests;
+
+export const setMap = (id: number) => {
+  mapId = ((id % MAPS.length) + MAPS.length) % MAPS.length;
+  ROWS = MAPS[mapId].rows;
+  SPAWNS = MAPS[mapId].spawns;
+  CHEST_SPOTS = MAPS[mapId].chests;
+};
 
 /** 0 grass, 1 solid, 2 tall grass, 3 water — same encoding as map.rs */
 export const tileAt = (x: number, y: number): number => {

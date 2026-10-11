@@ -8,6 +8,11 @@ import {
   STATUS,
   ZONE,
   SPAWN_SAFE_SECS,
+  WEAPONS,
+  POWERS,
+  CHEST_LOOT_NAMES,
+  FLARE_R2,
+  VISION_R2,
   explorerAddress,
   explorerTx,
 } from "../lib/config";
@@ -24,14 +29,17 @@ import {
 } from "../lib/nightfall";
 import { Character, SKINS } from "./character";
 import type { ArenaScene } from "./scene";
-import { ICONS } from "./textures";
+import { ICONS, LOOT_ICONS, THEMES } from "./textures";
 import { sfx } from "./sfx";
 import type { Bot } from "./bot";
 
 const MOVE_EVERY_MS = 125;
-const SWORD_EVERY_MS = 230;
+/** Client-side swing pacing per weapon (the TEE enforces the real cooldown in slots). */
+const SWING_MS = [230, 230, 230, 520, 380, 320];
 const BOW_EVERY_MS = 520;
-const CHEST_NAMES = ["", "Diamond Sword", "Golden Apple", "Quiver of Arrows"];
+const weaponIcon = (w: number) =>
+  [ICONS.woodSword, ICONS.woodSword, ICONS.diamondSword, LOOT_ICONS.axe, LOOT_ICONS.hammer, LOOT_ICONS.spear][w] ?? ICONS.woodSword;
+const powerIcon = (p: number) => ({ 7: LOOT_ICONS.pearl, 8: LOOT_ICONS.cloak, 9: LOOT_ICONS.flare })[p];
 const OCTANT_NAMES = ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"];
 const STREAKS = ["", "", "DOUBLE KILL", "TRIPLE KILL", "RAMPAGE", "UNSTOPPABLE"];
 const key = (k: string) => `<kbd>${k}</kbd>`;
@@ -186,6 +194,10 @@ export class MatchSession {
   private onArena(a: ArenaState) {
     const first = !this.arena;
     this.arena = a;
+    if (first) {
+      this.o.scene.setMap(a.mapId ?? 0);
+      this.minimapBase = null;
+    }
     if (a.tick !== this.lastTick) {
       this.lastTick = a.tick;
       this.lastTickChange = Date.now();
@@ -287,12 +299,19 @@ export class MatchSession {
           setTimeout(() => (arrow.style.opacity = "0"), 700);
         }
       }
-      if (weapon === 2 && prev.me[4] !== 2) this.loot(1);
-      else if (hp > prev.me[2]) {
-        this.loot(2);
+      if (weapon !== prev.me[4]) {
+        const w = WEAPONS[weapon];
+        this.loot(`${w.name}`, `${w.dmg} damage · ${w.note}`);
+        scene.floatText(x, y, w.name, "#9ef5f0", 0.9);
+      } else if (v.me[7] && v.me[7] !== prev.me[7]) {
+        const pw = POWERS[v.me[7]];
+        this.loot(pw.name, `${pw.note}. Press ${key("E")} to use`);
+        this.coach("power", `⚡ You found <b>${pw.name}</b>! Press ${key("E")} to use it: ${pw.note}.`, 7000);
+      } else if (hp > prev.me[2]) {
+        this.loot("Golden Apple", "+8 health");
         scene.floatText(x, y, `+${hp - prev.me[2]}`, "#60ff70");
       } else if (arrows > prev.me[5]) {
-        this.loot(3);
+        this.loot("Quiver", `+${arrows - prev.me[5]} arrows`);
         scene.floatText(x, y, `+${arrows - prev.me[5]} ➶`, "#ffffff");
       }
     }
@@ -357,7 +376,10 @@ export class MatchSession {
     }
 
     scene.setChests(v.chests.slice(0, v.chestCount).map(([cx, cy, kind]) => ({ x: cx, y: cy, kind })));
-    if (v.chestCount > 0 && alive) this.coach("chest", `✨ A glowing chest! Walk into it to loot it.`, 6000);
+    if (v.chestCount > 0 && alive) {
+      const k = v.chests[0][2];
+      this.coach("chest", `✨ A glowing chest. Walk into it: it holds a <b>${CHEST_LOOT_NAMES[k] ?? "surprise"}</b>.`, 6000);
+    }
     if (v.heard && alive) {
       const ks = [0, 1, 2, 3, 4, 5, 6, 7].filter((k) => (v.heard >> k) & 1);
       this.coach("hear", `👂 Red arcs are <b>footsteps you can't see</b>. Someone is to the ${OCTANT_NAMES[ks[0]]}.`, 6500);
@@ -374,9 +396,10 @@ export class MatchSession {
     this.renderStats();
   }
 
-  private loot(kind: number) {
+  private loot(name: string, detail: string) {
     sfx.chest();
-    this.chat(`You opened a chest: <b style="color:#ffd84a">${CHEST_NAMES[kind]}</b>`);
+    this.chat(`✨ Chest: <b style="color:#ffd84a">${esc(name)}</b> <span class="muted">${detail}</span>`);
+    this.banner(esc(name).toUpperCase(), detail, 1600);
   }
 
   private addGhost(slot: number, x: number, y: number) {
@@ -420,6 +443,7 @@ export class MatchSession {
       e.preventDefault();
       this.smartAttack();
     } else if (k === "f" || k === "k") this.attack(ACTION.bow);
+    else if (k === "e" || k === "q" || k === "l") this.usePower();
     else if (k === "x") this.toggleXray();
     else if (k === "h" || e.key === "?") this.toggleHelp();
     else if (e.key === "Escape") {
@@ -458,6 +482,8 @@ export class MatchSession {
     });
     this.hud.querySelector("[data-act-sword]")?.addEventListener("pointerdown", () => this.smartAttack());
     this.hud.querySelector("[data-act-bow]")?.addEventListener("pointerdown", () => this.attack(ACTION.bow));
+    this.hud.querySelector("[data-act-power]")?.addEventListener("pointerdown", () => this.usePower());
+    this.hud.querySelector("[data-slot='2']")?.addEventListener("click", () => this.usePower());
     this.hud.querySelector("[data-slot='0']")?.addEventListener("click", () => this.smartAttack());
     this.hud.querySelector("[data-slot='1']")?.addEventListener("click", () => this.attack(ACTION.bow));
   }
@@ -508,11 +534,13 @@ export class MatchSession {
     if (!v || !this.canAct()) return;
     const enemies = v.seen.slice(0, v.seenCount);
     const { x, y } = this.pred;
-    for (let d = 0; d < 4; d++)
-      if (enemies.some((e) => e[1] === x + DX[d] && e[2] === y + DY[d])) {
-        this.facing = d;
-        return this.attack(ACTION.sword);
-      }
+    const reach = WEAPONS[v.me[4]]?.reach ?? 1;
+    for (let r = 1; r <= reach; r++)
+      for (let d = 0; d < 4; d++)
+        if (enemies.some((e) => e[1] === x + DX[d] * r && e[2] === y + DY[d] * r) && (r === 1 || tileAt(x + DX[d], y + DY[d]) !== 1)) {
+          this.facing = d;
+          return this.attack(ACTION.sword);
+        }
     if (v.me[5] > 0)
       for (const e of enemies) {
         if (e[1] !== x && e[2] !== y) continue;
@@ -523,6 +551,37 @@ export class MatchSession {
         }
       }
     this.attack(ACTION.sword);
+  }
+
+  private usePower() {
+    const v = this.vision;
+    if (!v || !this.canAct()) return;
+    const p = v.me[7];
+    if (!p) {
+      this.chat("<span class='muted'>No power yet. Chests can hold an Ender Pearl, Cloak or Flare.</span>");
+      return;
+    }
+    const { x, y } = this.pred;
+    if (p === 7) {
+      // Predict the blink so it feels instant.
+      for (let r = 3; r >= 1; r--) {
+        const tx = x + DX[this.facing] * r;
+        const ty = y + DY[this.facing] * r;
+        if (walkable(tx, ty) && !this.enemyAt(tx, ty)) {
+          this.o.scene.burst(x, 0.6, y, 0x5fe0c8, 14);
+          this.o.scene.burst(tx, 0.6, ty, 0x5fe0c8, 14);
+          this.pred.set(tx, ty);
+          this.me?.place(tx, ty, this.facing);
+          break;
+        }
+      }
+      sfx.bow();
+    } else {
+      this.o.scene.burst(x, 1, y, p === 8 ? 0x9a60ff : 0xffd84a, 20);
+      sfx.chest();
+    }
+    this.flashSlot(2, 600);
+    this.send(ACTION.power, this.facing);
   }
 
   private clearShot(x: number, y: number, d: number, tx: number, ty: number) {
@@ -539,11 +598,12 @@ export class MatchSession {
     if (!this.canAct()) return;
     const now = Date.now();
     if (kind === ACTION.sword) {
-      if (now - this.lastSwordAt < SWORD_EVERY_MS) return;
+      const swing = SWING_MS[this.vision?.me[4] ?? 1] ?? 230;
+      if (now - this.lastSwordAt < swing) return;
       this.lastSwordAt = now;
       this.me!.swing();
       sfx.swing();
-      this.flashSlot(0, SWORD_EVERY_MS);
+      this.flashSlot(0, swing);
     } else {
       const arrows = this.vision?.me[5] ?? 0;
       if (arrows <= 0) {
@@ -583,6 +643,9 @@ export class MatchSession {
     else if (this.pathTarget) this.followPath();
     this.senses();
     if (this.me && this.alive) {
+      const v = this.vision!;
+      this.me.setGhost(v.me[8] > 0);
+      this.o.scene.viewR2 = v.me[9] > 0 ? FLARE_R2 : VISION_R2;
       this.me.target.copy(this.pred);
       this.me.facing = this.facing;
       this.o.scene.setTorch(this.me.pos.x, this.me.pos.y, true);
@@ -714,6 +777,7 @@ export class MatchSession {
         <div>${key("W")}${key("A")}${key("S")}${key("D")} / arrows</div><div>Move · or <b>click the ground</b></div>
         <div>${key("SPACE")}</div><div>Attack: sword if adjacent, bow if they're lined up</div>
         <div>${key("F")}</div><div>Shoot your bow straight ahead</div>
+        <div>${key("E")}</div><div>Use your power: Ender Pearl blink · Cloak invisibility · Flare far sight</div>
         <div>${key("X")}</div><div>X-ray: try to see through the fog (you can't)</div>
         <div>${key("M")}</div><div>Mute</div>
       </div>
@@ -721,7 +785,7 @@ export class MatchSession {
         <li>You only see what your <b>torch</b> lights. So does everyone else.</li>
         <li><b style="color:#ff6060">Red arcs</b> = footsteps you can hear but can't see.</li>
         <li><b>Tall grass</b> hides you unless someone is right next to you.</li>
-        <li><b>Chests</b> glow: 💎 Diamond Sword (more damage) · 🍎 Golden Apple (+8 health) · ➶ Arrows.</li>
+        <li><b>Chests</b> glow. Weapons: Diamond Sword (6) · <b>Battle Axe</b> (9, slow) · <b>War Hammer</b> (knockback) · <b>Spear</b> (reach 2). Also Golden Apples (+8), Arrows and powers.</li>
         <li>After 40s the <b style="color:#8fd8ff">world border</b> shrinks every 8s. Outside it, you burn.</li>
         <li>Last one standing wins the pot.</li>
       </ul>
@@ -745,8 +809,11 @@ export class MatchSession {
       const b = base.getContext("2d")!;
       ROWS.forEach((row, y) =>
         [...row].forEach((ch, x) => {
-          b.fillStyle = ch === "T" ? "#24461b" : ch === "#" ? "#5a5a66" : ch === "~" ? "#2a4f9a" : ch === '"' ? "#3f6e2a" : "#1d2e17";
+          const th = THEMES[this.o.scene.theme];
+          b.fillStyle = ch === "T" ? th.leaves : ch === "#" ? th.wall : ch === "~" ? th.liquid : ch === '"' ? th.plant : th.top;
+          if (ch === "." || ch === "S" || ch === "C") b.globalAlpha = 0.45;
           b.fillRect(x * S, y * S, S, S);
+          b.globalAlpha = 1;
         }),
       );
       this.minimapBase = base;
@@ -808,11 +875,12 @@ export class MatchSession {
       <div class="center-banner" data-banner></div>
       <div class="coach" data-coach></div>
       <div class="bottom" ${this.spectator ? 'style="display:none"' : ""}>
-        <div class="keys hide-touch">${key("WASD")} move · ${key("SPACE")} attack · ${key("F")} bow · ${key("H")} help</div>
+        <div class="keys hide-touch">${key("WASD")} move · ${key("SPACE")} attack · ${key("F")} bow · ${key("E")} power · ${key("H")} help</div>
         <div class="hearts" data-hearts></div>
         <div class="hotbar">
-          <div class="slot" data-slot="0"><span class="key">1</span><img data-sword-icon src="${ICONS.woodSword()}" alt="sword"/></div>
-          <div class="slot" data-slot="1"><span class="key">2</span><img src="${ICONS.bow()}" alt="bow"/><span class="count" data-arrows>0</span></div>
+          <div class="slot" data-slot="0"><span class="key">␣</span><img data-sword-icon src="${ICONS.woodSword()}" alt="sword"/></div>
+          <div class="slot" data-slot="1"><span class="key">F</span><img src="${ICONS.bow()}" alt="bow"/><span class="count" data-arrows>0</span></div>
+          <div class="slot" data-slot="2"><span class="key">E</span><img data-power-icon alt="" style="visibility:hidden"/><span class="count" data-power-timer></span></div>
         </div>
       </div>
       <div class="touch" ${this.spectator ? 'style="display:none"' : ""}>
@@ -822,6 +890,7 @@ export class MatchSession {
           <span></span><button data-pad="2">▼</button><span></span>
         </div>
         <div class="acts">
+          <button data-act-power>POWER</button>
           <button data-act-bow>BOW</button>
           <button data-act-sword>ATTACK</button>
         </div>
@@ -850,7 +919,13 @@ export class MatchSession {
     }
     hearts.innerHTML = icons.join("");
     hearts.classList.toggle("low", hp > 0 && hp <= 6);
-    h<HTMLImageElement>(this.hud, "[data-sword-icon]").src = v?.me[4] === 2 ? ICONS.diamondSword() : ICONS.woodSword();
+    h<HTMLImageElement>(this.hud, "[data-sword-icon]").src = weaponIcon(v?.me[4] ?? 1)();
+    const pi = h<HTMLImageElement>(this.hud, "[data-power-icon]");
+    const pIcon = v?.me[7] ? powerIcon(v.me[7]) : undefined;
+    pi.style.visibility = pIcon ? "visible" : "hidden";
+    if (pIcon) pi.src = pIcon();
+    const active = v ? Math.max(v.me[8], v.me[9]) : 0;
+    h(this.hud, "[data-power-timer]").textContent = active ? `${active}s` : "";
     h(this.hud, "[data-arrows]").textContent = String(v?.me[5] ?? 0);
     if (v) h(this.hud, "[data-xy]").textContent = `XY ${v.me[0]}, ${v.me[1]} · seen ${v.seenCount} · v${v.version}`;
     if (this.latency.length) {

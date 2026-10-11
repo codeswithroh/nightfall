@@ -870,6 +870,7 @@ export class MatchSession {
     const { scene, me, arenaId } = this.o;
     scene.clearFog();
     scene.setTorch(0, 0, false);
+    scene.spectatorLight();
     // Hide everything Vision-driven; the broadcast takes over.
     for (const [slot, c] of [...scene.characters]) if (slot < 100 && slot !== this.o.slot) {
       c.dispose();
@@ -933,6 +934,7 @@ export class MatchSession {
       if (!c && hp > 0) {
         c = new Character(a.skins[i], `${this.name(i)}`, this.skinColor(i));
         c.setRing(0x8fd8ff);
+        c.setTagScale(1.6);
         c.place(b.x[i], b.y[i], b.facing[i]);
         scene.scene.add(c.root);
         scene.characters.set(key, c);

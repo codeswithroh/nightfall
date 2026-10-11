@@ -263,6 +263,11 @@ export class ArenaScene {
     this.explored.fill(0);
   }
 
+  /** Spectators get extra moonlight: they're watching the whole map, not playing in the dark. */
+  spectatorLight() {
+    if (!this.day) this.ambient.intensity = Math.max(this.ambient.intensity, 0.85);
+  }
+
   setDaylight(on: boolean) {
     this.day = on;
     this.viewR2 = on ? DAY_R2 : VISION_R2;

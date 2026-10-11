@@ -1,185 +1,319 @@
+<div align="center">
+
+<img src="docs/media/title.png" alt="Nightfall title screen: a blocky hero by a campfire in a moonlit arena" width="100%"/>
+
 # 🌙 Nightfall
 
-**A real-time battle royale with true fog of war — where even the host can't see you.**
+### A real-time battle royale with true fog of war, where even the server can't see you.
 
-▶ **Play:** https://nightfall-blitz.vercel.app
+Every player's position is sealed inside **MagicBlock's Private Ephemeral Rollup** (an Intel TDX enclave).
+Your wallet can read your own line of sight and nothing else.
 
-Blocky heroes, a moonlit voxel arena, a closing world border, and one rule: you only see what your torch lights.
-Every position lives inside **MagicBlock's Private Ephemeral Rollup** (an Intel TDX enclave). Your wallet can read
-your own line of sight and nothing else. Not your opponents, not spectators, not the RPC, not the person who
-created the match.
+[![Play now](https://img.shields.io/badge/▶_PLAY_NOW-nightfall--blitz.vercel.app-3f8a2a?style=for-the-badge)](https://nightfall-blitz.vercel.app)
+[![Program on Solana devnet](https://img.shields.io/badge/Solana_devnet-program-9945FF?style=for-the-badge&logo=solana&logoColor=white)](https://explorer.solana.com/address/Ccu5SMkkNDj2sBE3mpFhWeUGujQg29aQZ2BKS7CRXbDB?cluster=devnet)
 
-> Fog of war has been the missing piece in onchain games since Dark Forest: public state means everyone can read
-> the map. Nightfall solves it without ZK circuits and at real-time speed (~50–150 ms per move).
+![MagicBlock](https://img.shields.io/badge/MagicBlock-ER_·_PER_·_VRF_·_Crank-ffcf40?style=flat-square)
+![Anchor](https://img.shields.io/badge/Anchor-1.0.2-5243AA?style=flat-square)
+![Rust](https://img.shields.io/badge/Rust-1.89-ce422b?style=flat-square&logo=rust)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?style=flat-square&logo=typescript&logoColor=white)
+![three.js](https://img.shields.io/badge/three.js-voxel_world-000000?style=flat-square&logo=three.js)
+![Tests](https://img.shields.io/badge/rule_tests-12%2F12_passing-6fe36f?style=flat-square)
+![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
+
+**[Play](https://nightfall-blitz.vercel.app)** · **[Watch it](#-see-it-in-action)** · **[How it works](#-how-it-works)** · **[Run locally](#-run-it-yourself)**
+
+</div>
 
 ---
 
-## How it plays
+## 📖 Table of contents
 
-**One click to play:** hit **▶ PLAY**. While the arena is set up onchain (~15 s) you're dropped into a **warm-up yard**
-by a campfire with a training dummy: four tiny quests (walk, hit, shoot, blink) teach every control by doing it, and
-the onchain steps tick off beside you. When the night is ready, *you* choose to drop in. The match only goes live
-(VRF spawns) at that moment, so you never lose time.
+- [The idea](#-the-idea)
+- [See it in action](#-see-it-in-action)
+- [Features](#-features)
+- [How to play](#-how-to-play)
+- [How it works](#-how-it-works)
+  - [Architecture](#architecture)
+  - [Life of a match](#life-of-a-match)
+  - [Why it can't be cheated](#why-it-cant-be-cheated)
+  - [MagicBlock primitives used](#magicblock-primitives-used)
+- [Tech stack](#-tech-stack)
+- [Run it yourself](#-run-it-yourself)
+- [Tests & verification](#-tests--verification)
+- [Project structure](#-project-structure)
+- [Roadmap](#-roadmap)
+- [Credits & license](#-credits--license)
 
-**Your hero, your arena:** pick a skin, hat (crown, horns, halo, wizard hat) and cape on the title screen. They're
-packed into the same onchain skin byte everyone sees. Choose between three arenas: **Moonlit Woods** (tall grass and
-ponds), **Frostpeak Ruins** (open snowfields, long bow lines) and **Ember Keep** (a lava maze for close-quarters ambushes).
+---
 
-**Loot that changes how you fight** (all resolved inside the TEE):
+## 💡 The idea
 
-| Chest | Effect |
+Onchain games have always been played **with the cards face up**. Every account is public, so any "hidden"
+information (where your opponent is, what's in their hand) can be read straight from the RPC. That's why fog of war,
+the backbone of strategy games and battle royales, has been nearly impossible onchain. Dark Forest needed ZK circuits
+and ran at a crawl.
+
+**Nightfall fixes it with MagicBlock's Private Ephemeral Rollups.** All positions live in a `World` account sealed inside
+a TEE with **zero readers**. Every move, the program recomputes what each player is allowed to see and writes it to a
+per-player `Vision` account that **only that player's wallet** can read. The result is a real-time, blocky battle
+royale where you see only what your torch lights, and nobody can cheat their way past that, the host included.
+
+> **Try to cheat:** press <kbd>X</kbd> in a match. The X-ray panel queries the TEE with *your own* token:
+> `World → null`, `Opponent's Vision → null`, `Your Vision → 155 bytes`.
+
+---
+
+## 🎬 See it in action
+
+<div align="center">
+  <img src="docs/media/demo.gif" alt="Gameplay: walking through the dark arena, spotting an enemy in the torchlight, fighting" width="90%"/>
+  <br/><sub>A real devnet match recorded headlessly against MagicBlock's TEE. Every step and swing is a transaction.</sub>
+</div>
+
+<br/>
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/media/warmup-ready.png" alt="Warm-up yard"/><br/><b>Warm-up yard.</b> Learn every control on a training dummy while the arena is set up onchain.</td>
+    <td width="50%"><img src="docs/media/gameplay-fight.png" alt="Fog of war fight"/><br/><b>Fog of war.</b> Only what your torch reaches. Red arcs = footsteps you hear but can't see.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/xray.png" alt="X-ray panel"/><br/><b>Try to cheat.</b> The X-ray asks the TEE for the World and other players' Visions: <code>null</code>.</td>
+    <td><img src="docs/media/spectate-follow.png" alt="Spectator broadcast following a player"/><br/><b>Spectate.</b> Every player, on a short broadcast delay so nobody can feed positions to a player.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/gameplay-day.png" alt="Daylight match on Frostpeak"/><br/><b>Night or day.</b> Daylight arenas see further, but walls and tall grass still hide you.</td>
+    <td><img src="docs/media/reveal.png" alt="Reveal the night"/><br/><b>Reveal the night.</b> When it ends, the World unseals and anyone can verify what really happened.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/title-frost-day.png" alt="Frostpeak Ruins by day"/><br/><b>Three arenas.</b> Moonlit Woods, Frostpeak Ruins and Ember Keep, each with its own blocks, light and layout.</td>
+    <td><img src="docs/media/title-ember.png" alt="Ember Keep"/><br/><b>Your hero.</b> Six original skins, hats and capes, stored onchain in one byte.</td>
+  </tr>
+</table>
+
+<div align="center">
+  <img src="docs/media/mobile-title.png" alt="Mobile title screen" width="260"/>
+  <br/><sub>Plays on phones too: tap to walk, on-screen attack, bow and power buttons.</sub>
+</div>
+
+---
+
+## ✨ Features
+
+**Gameplay**
+- ⚔️ **Up to 6 players** (humans or bots) in a shrinking-border battle royale. Last one standing takes the onchain pot.
+- 🔦 **Three-layer fog of war:** what you **see** (torch radius + line of sight), what you **remember** (dimmed terrain),
+  and what you **hear** (the TEE tells you the *direction* of unseen enemies within 8 tiles, never their position).
+- 🌾 **Tall grass** hides you unless someone is right next to you; stone and trees block sight; arrows fly over water.
+- 🧰 **10 loot chests:** Diamond Sword, **Battle Axe** (9 dmg, slow), **War Hammer** (knockback), **Spear** (reach 2),
+  Golden Apples, arrows, and powers: **Ender Pearl** (blink over walls), **Cloak** (invisible + silent), **Flare** (far sight).
+- 🗺️ **Three arenas** × **night or day**. Spawns fill the corners first, plus 10 s of spawn protection.
+- 🤖 **Bots with personalities** (archer / brawler / mixed) that play from *their own* sealed Vision, so they can't cheat either.
+
+**Feel & onboarding**
+- ▶️ **One button to play.** No wallet popups: a devnet burner lives in the browser.
+- 🏕️ **Warm-up yard** while the chain sets up: four quick quests teach every control by doing them, and *you* choose when to drop in.
+- 💬 **Just-in-time coaching:** a single tip the first time you see a chest, an enemy, footsteps, or the border.
+- 🎮 **Game feel:** hit-stop, damage numbers, screen shake, kill streaks, heartbeat at low health, countdown beeps,
+  synthesized night ambience and stereo footsteps. **Zero asset files**: every block, skin, icon and sound is generated in code.
+- 👁️ **Spectate without a code:** an onchain registry lists recent arenas, live first; follow any player with ←/→.
+
+---
+
+## 🎮 How to play
+
+| Key | Action |
 | --- | --- |
-| Diamond Sword | 6 damage, quick |
-| Battle Axe | 9 damage, slow swing |
-| War Hammer | 5 damage, knocks the target back 2 tiles |
-| Spear | 5 damage from **2 tiles** away |
-| Golden Apple / Quiver | +8 health / +4 arrows |
-| **Ender Pearl** (`E`) | Blink 3 tiles ahead, straight over walls |
-| **Cloak** (`E`) | Invisible *and silent* for 8 s; attacking breaks it |
-| **Flare** (`E`) | See twice as far for 8 s, even into tall grass |
+| <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrows, or **click the ground** | Move (click-to-walk pathfinds for you) |
+| <kbd>Space</kbd> | **Attack**: auto-aims. Melee if someone's in reach, bow if they're lined up |
+| <kbd>F</kbd> | Shoot the bow straight ahead |
+| <kbd>E</kbd> | Use your power (Pearl / Cloak / Flare) |
+| <kbd>H</kbd> · <kbd>X</kbd> · <kbd>M</kbd> | Help · X-ray (try to cheat) · Mute |
 
-Players get 10 s of spawn protection, and the four corners fill first so nobody spawns next to an enemy.
-The border waits 60 s, then closes one tile every 14 s (matches run ~2–3 minutes).
+**Rules:** you only see what your torch lights → loot chests → the border waits 60 s then closes a tile every 14 s →
+outside it you burn → last one standing wins.
 
-**Night or day:** pick 🌙 Night (torchlight, ~4 tiles of sight) or ☀ Day (bright sky, ~7 tiles) per arena. Daylight
-still hides you behind walls and in tall grass.
+---
 
-**Spectate without a code:** the spectate menu lists recent arenas from an onchain registry, live matches first.
-Spectators (and dead players) watch **every player** on a public broadcast that the TEE writes from snapshots taken
-~8–10 s earlier, like an esports broadcast delay. You get the whole picture, but a spectator can never feed a live
-position to someone still playing. Follow any player with ←/→, or `0` for the overview.
+## 🧠 How it works
 
-**Bots with personalities:** each bot is an archer (keeps distance and lines up shots), a brawler (charges in) or a
-mix, so fights look different every time.
+### Architecture
 
-| Key | Does |
+```mermaid
+flowchart LR
+  subgraph Browser["🧑 Player's browser"]
+    UI["three.js voxel client<br/>burner wallet"]
+  end
+  subgraph Solana["Solana devnet (base layer)"]
+    P["Nightfall program<br/>(Anchor 1.0)"]
+    V["Vault PDA<br/>stakes, never delegated"]
+    R["Registry PDA<br/>recent arenas"]
+  end
+  subgraph TEE["MagicBlock Private ER · Intel TDX"]
+    A["Arena<br/>🌐 public: scoreboard, border, feed"]
+    W["World<br/>🔒 no readers: every x, y, hp, loot"]
+    VI["Vision[i]<br/>🔑 readable only by player i"]
+    B["Broadcast<br/>🌐 public, ~10 s delayed snapshot"]
+  end
+  UI -- "create / join / delegate" --> P
+  UI -- "act(move | attack | bow | power)<br/>~100 ms, gasless" --> W
+  W -- "recomputed every tx" --> VI
+  VI -- "auth-token RPC / websocket" --> UI
+  CR["⏱ MagicBlock crank"] -- "tick: border + broadcast" --> A
+  VRF["🎲 MagicBlock VRF"] -- "spawn callback" --> W
+  A -- "commit + undelegate" --> P
+  P -- "claim" --> V
+```
+
+### Life of a match
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant H as Host (you)
+  participant S as Solana
+  participant T as TEE rollup
+  participant O as VRF oracle
+  H->>S: create_arena (map, day/night) + delegate own Vision
+  Note over H: warm-up yard starts: walk, hit, shoot, blink
+  H->>S: 3 bots join + delegate their Visions
+  H->>S: delegate Arena, World, Broadcast
+  H->>T: init_permission ×N: World=sealed, Vision[i]=player i, Arena/Broadcast=public
+  H->>T: request_spawn (refused unless everything is provably sealed)
+  O-->>T: spawn_callback(randomness) → positions written inside the enclave
+  loop every move (~100 ms)
+    H->>T: act(...) → rules run → every Vision rewritten
+  end
+  T->>T: crank: tick → border shrinks, broadcast snapshot
+  H->>T: reveal (World → public) · settle (commit + undelegate)
+  H->>S: claim → winner paid from the vault
+```
+
+### Why it can't be cheated
+
+| Threat | Defence |
 | --- | --- |
-| `WASD` / arrows, or **click the ground** | Move (click-to-walk pathfinds for you) |
-| `SPACE` | Attack. Auto-aims: sword if someone's next to you, bow if they're lined up |
-| `F` | Shoot the bow straight ahead |
-| `E` | Use your power |
-| `H` | How to play · `X` X-ray · `M` mute |
+| Read positions from the RPC | `World` has an `EphemeralPermission` with **no members**; the TEE returns `null` to everyone, host included |
+| Grant yourself access to someone's Vision | `init_permission` **ignores caller input**: the program decides members (Vision → its owner only) |
+| Spawn on the public base layer to learn positions | `request_spawn` / `spawn_fallback` parse every permission account and **refuse unless World and all Visions are sealed** |
+| Blind an opponent by omitting their Vision | every `act`/`tick` must pass **all** Visions in slot order |
+| Leak through logs | no instruction ever logs a position |
+| Spectate your own match to see everyone | spectators get a **public broadcast written from snapshots ~10 s old**, like an esports delay |
+| Rig the spawn | spawns come from **MagicBlock VRF** inside the rollup (TEE-mixed entropy fallback only if the oracle stalls) |
 
-New players are coached in the moment, never with a wall of text: the first time you move, spot a chest, see an enemy,
-hear footsteps, or the border reaches you, a single short tip appears (each at most twice).
+### MagicBlock primitives used
 
-**Game feel:** hit-stop on impact, floating damage numbers, footstep dust, camera shake, kill streaks
-(DOUBLE KILL / RAMPAGE), a heartbeat and red pulse at low health, countdown beeps before the border moves, and fully
-synthesized audio: night ambience (wind + crickets), stereo-panned footsteps, chest chimes. No audio files.
-
-**Fog of war, three ways:** what you see now (torchlight + line of sight), what you've seen before (remembered, dimmed),
-and what you **hear**. The TEE tells each player only the *compass direction* of unseen enemies within ~8 tiles.
-Red arcs pulse around you and muffled footsteps play from that side, so you know someone's out there but not where.
-A minimap shows the border, you, and fading last-seen marks.
-
-- Up to **6 players** (humans or bots) join an arena by code or link and pick one of six original blocky skins.
-- The host starts the night. **MagicBlock VRF** rolls everyone's spawn point **inside the enclave**.
-- **WASD / arrows** to move, **Space** sword, **F** bow (3 arrows), **X** opens the X-ray panel.
-- Loot chests hide in the dark: **Diamond Sword**, **Golden Apple**, **Quiver**.
-- Tall grass hides you unless someone is right next to you. Stone and trees block line of sight.
-- After a 40 s grace period the **world border** shrinks every 8 s. A MagicBlock **crank** advances it onchain.
-- Last one standing takes the **onchain pot**. Then anyone can **reveal the night**: the World unseals and you can
-  check every position against what you saw.
-
-## Why only MagicBlock can do this
-
-| Primitive | What it does in Nightfall |
+| Primitive | Where |
 | --- | --- |
-| **Ephemeral Rollup** | Every step, swing and arrow is its own transaction, gasless and fast enough to feel like a game |
-| **Private ER (TEE)** | `World` (all positions) is sealed with **zero readers**. Each `Vision` PDA is readable **only by its owner** |
-| **VRF** | Spawn points are rolled inside the rollup and written straight into the sealed World |
-| **Crank / scheduler** | `tick` is scheduled on the ER so the border closes even when nobody moves |
-| **Commit + undelegate** | The final result settles on Solana; the vault pays the winner |
+| **Ephemeral Rollup** | Every step, swing, arrow and power is its own gasless transaction (~100 ms round trip) |
+| **Private ER (TEE)** | Sealed `World`, per-player `Vision`, public `Arena`/`Broadcast` via `EphemeralPermission` CPIs |
+| **VRF** | `request_spawn` → `spawn_callback` writes spawns and chest loot straight into the sealed World |
+| **Crank / scheduler** | `schedule_ticks` puts the border and broadcast on the rollup's scheduler (clients tick as a fallback) |
+| **Commit / undelegate** | `settle` brings the result back to Solana; `claim` pays the pot from a never-delegated vault |
 
-### The privacy model
+---
 
-```
-               Solana devnet (base layer)                     MagicBlock TEE rollup (Intel TDX)
-  ┌────────────────────────────────────────┐     delegate     ┌───────────────────────────────────────────────┐
-  │ Arena  (lobby, stake, players)         │ ───────────────▶ │ Arena   public: scoreboard, kill feed, border  │
-  │ World  (empty until spawn)             │ ───────────────▶ │ World   sealed, NO readers: x, y, hp, loot      │
-  │ Vision[i]                              │ ───────────────▶ │ Vision i  sealed, reader = player i only        │
-  │ Vault  (stakes, never delegated)       │ ◀─── settle ──── │                                                 │
-  └────────────────────────────────────────┘                  │ act(move|sword|bow) → rules run in the enclave  │
-                                                              │   → every Vision recomputed in the same tx       │
-                                                              └───────────────────────────────────────────────┘
-```
+## 🛠 Tech stack
 
-- `act` is signed by the player, touches `World` and **every** `Vision`, runs the rules, then rewrites each player's
-  Vision with only what that player can see (torch radius + Bresenham line of sight + tall-grass rule).
-- Permissions are decided **by the program, not the caller**: `init_permission` ignores client input and sets
-  `Arena → public`, `World → private, no members`, `Vision[i] → private, members = [players[i]]`.
-- Spawning is refused unless the World and every Vision are **provably sealed** (the program parses each
-  `EphemeralPermission` account). So a host can't spawn on the public base layer to learn where people are.
-- Every tx must pass all Visions in slot order, so nobody can blind an opponent by leaving their account out.
-- No position is ever logged. The base-layer copy of `World` is the pre-spawn snapshot, so it holds no positions.
+| Layer | Tech |
+| --- | --- |
+| Program | Rust 1.89 · Anchor 1.0.2 · `ephemeral-rollups-sdk` 0.17.3 (access-control, VRF, crank) · Agave 3.1.9 |
+| Client | TypeScript · three.js · Vite · `@magicblock-labs/ephemeral-rollups-sdk` · `@solana/web3.js` · Anchor TS |
+| Art & audio | Procedural pixel textures, voxel characters and items, WebAudio synthesis; no asset files |
+| Infra | Solana devnet · MagicBlock devnet TEE (`devnet-tee.magicblock.app`) · Vercel |
 
-You can check all of this live: press **X** in game. The client queries the TEE with your own token and shows
-`World → null`, `Opponent's Vision → null`, `Your Vision → 139 bytes`.
+---
 
-## Repo layout
+## 🚀 Run it yourself
 
-```
-programs/nightfall/src/
-  lib.rs      instructions: lobby, delegation, permissions, VRF spawn, act, tick, crank, reveal, settle, claim
-  logic.rs    pure game rules + fog-of-war computation (unit-tested)
-  state.rs    Arena / World / Vision accounts
-  map.rs      generated from scripts/gen-map.py (shared with the client)
-app/
-  src/lib/      NightfallClient (base + TEE connections, auth tokens, tx plumbing), map helpers
-  src/game/     three.js scene, blocky characters, session (input, prediction, HUD, X-ray), bots, sfx
-  tests/e2e.ts  full devnet run: create → join → seal → VRF → hunt → kill → reveal → settle → claim
-  tests/guest.ts  join any arena from a terminal as one or more bots
-```
+**Just play:** <https://nightfall-blitz.vercel.app>. Press **PLAY**; if your burner needs devnet SOL, the game walks you through the faucet.
 
-## Run it
-
-Devnet program: [`Ccu5SMkkNDj2sBE3mpFhWeUGujQg29aQZ2BKS7CRXbDB`](https://explorer.solana.com/address/Ccu5SMkkNDj2sBE3mpFhWeUGujQg29aQZ2BKS7CRXbDB?cluster=devnet)
+**Run the client locally**
 
 ```bash
-cd app && npm install && npm run dev
+git clone https://github.com/codeswithroh/nightfall && cd nightfall/app
+npm install
+npm run dev            # http://localhost:5173, talks to the deployed devnet program
 ```
 
-Open the page. A burner wallet is created in your browser, so give it ~0.05 devnet SOL (use the "Get devnet SOL"
-button, or paste the address into [faucet.solana.com](https://faucet.solana.com)). Then create an arena, share the link, or press **Add bot**.
-
-Fill a lobby from the terminal (funded from `~/.config/solana/id.json`):
+**Fill a lobby from the terminal** (bots funded from `~/.config/solana/id.json`)
 
 ```bash
 cd app && npm run guest -- <arena code> 3
 ```
 
-End-to-end test against devnet + the TEE:
+**Build, test and deploy the program**
 
 ```bash
-cd app && npm run e2e
-```
-
-Build and test the program (Agave 3.1.9, Anchor 1.0.2, Rust 1.89, `ephemeral-rollups-sdk` 0.17.3):
-
-```bash
+# toolchain: Agave 3.1.9, Anchor 1.0.2, Rust 1.89 (rust-toolchain.toml pins it)
 anchor build
-cargo test --manifest-path programs/nightfall/Cargo.toml
+cargo test --manifest-path programs/nightfall/Cargo.toml    # 12 rule tests
+anchor deploy --provider.cluster devnet
+cd app && npm run sync-idl
 ```
 
-## Devnet e2e output (abridged)
+---
 
-```
+## ✅ Tests & verification
+
+- **12 rule tests** (`programs/nightfall/src/logic.rs`): line of sight, tall grass, hearing octants, border timing,
+  spawn spread and protection, every weapon (axe damage + cooldown, hammer knockback stopped by walls, spear reach),
+  chest loot, every power (pearl blinks over walls, cloak hides even adjacent players until you attack, flare range),
+  daylight sight, broadcast delay, all three maps.
+- **Devnet end-to-end** (`app/tests/e2e.ts`): two players, real TEE, full lifecycle.
+
+```text
 match live, vrf = true
-crank scheduled: Dr82KEYG…
 guest peeks host vision → null ✅ sealed
 guest peeks world → null ✅ sealed
 host peeks world → null ✅ sealed (even the host)
 spectator reads public arena → ok ✅
-player 0 spotted player 1 through the fog at step 6
-status 3 winner slot 0 kills [ 1, 0 ] feed [ 0, 1, 1 ]
+player 1 spotted player 0 through the fog at step 18
+status 3 winner slot 0 kills [ 1, 0 ]
 after reveal, guest reads world → visible ✅
 winner received 0.02 SOL
 ✅ e2e complete
 ```
 
-## Credits
+- **Played in the browser** end to end: title → warm-up quests → drop in → loot → fight → win → reveal → settle → paid,
+  plus a second tab spectating the same match. The previews above were captured from real devnet matches.
 
-All art (blocks, skins, items, hearts) is procedurally drawn in code: no external assets. The look is a tribute to
-classic block games; the characters are original.
-Built for the MagicBlock **Solana Blitz** hackathon.
+---
+
+## 📁 Project structure
+
+```text
+nightfall/
+├── programs/nightfall/src/
+│   ├── lib.rs        # instructions: lobby, delegation, permissions, VRF spawn, act, tick, crank, reveal, settle, claim
+│   ├── logic.rs      # pure rules: fog, hearing, weapons, powers, border, broadcast (+ tests)
+│   ├── state.rs      # Arena · World · Vision · Broadcast · Registry
+│   └── map.rs        # generated by scripts/gen-map.py (3 symmetric, connectivity-checked arenas)
+├── app/
+│   ├── src/lib/      # NightfallClient: base + TEE connections, auth tokens, reliable send/confirm
+│   ├── src/game/     # scene, voxel characters, session (HUD, prediction, spectating), warm-up yard, bots, sfx
+│   └── tests/        # e2e.ts (devnet + TEE), guest.ts (terminal bots)
+├── scripts/gen-map.py
+└── docs/media/       # README previews
+```
+
+---
+
+## 🗺 Roadmap
+
+- [ ] Session keys + Phantom/Backpack for real-wallet play (burner stays as the instant option)
+- [ ] Server-side bots so matches keep going if the host closes their tab
+- [ ] Ranked seasons with an onchain leaderboard (Magic Actions on settle)
+- [ ] Squads (2v2v2) with shared team Visions, a natural fit for permission groups
+- [ ] Replays from the revealed World + move history
+
+---
+
+## 🙌 Credits & license
+
+Built for the **MagicBlock Solana Blitz** hackathon on MagicBlock's Ephemeral Rollups, Private Ephemeral Rollups,
+VRF and crank scheduler.
+All art and audio are procedurally generated. The blocky look is a tribute to classic block games; the characters,
+items and arenas are original.
+
+Released under the [MIT License](LICENSE).

@@ -7,7 +7,6 @@ import {
   SystemProgram,
   Transaction,
   TransactionInstruction,
-  sendAndConfirmTransaction,
 } from "@solana/web3.js";
 import nacl from "tweetnacl";
 import {
@@ -138,6 +137,50 @@ const keypairWallet = (kp: Keypair) => ({
 
 const idl = { ...(rawIdl as object), address: PROGRAM_ID.toBase58() } as Nightfall;
 
+/**
+ * Send and confirm by polling, rebroadcasting every 1.5 s. Public devnet RPCs silently drop
+ * transactions; web3.js's default confirm then waits out the whole blockhash (60–90 s). This
+ * gives up after `timeoutMs` and re-signs with a fresh blockhash, up to `attempts` times.
+ */
+export async function sendReliably(
+  conn: Connection,
+  build: (blockhash: string) => Transaction,
+  { timeoutMs = 20_000, attempts = 3, label = "transaction" } = {},
+): Promise<string> {
+  let lastErr: unknown = null;
+  // Every signature we've sent stays in play: a "dropped" attempt can still land late, and the
+  // retry must not execute the same action twice.
+  const sigs: string[] = [];
+  const raws: Buffer[] = [];
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const { blockhash } = await conn.getLatestBlockhash("confirmed");
+    const raw = build(blockhash).serialize();
+    raws.push(raw);
+    sigs.push(await conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }));
+    const deadline = Date.now() + timeoutMs;
+    let lastSend = Date.now();
+    while (Date.now() < deadline) {
+      await sleep(500);
+      const statuses = (await conn.getSignatureStatuses(sigs).catch(() => null))?.value ?? [];
+      for (let i = 0; i < sigs.length; i++) {
+        const st = statuses[i];
+        if (!st) continue;
+        if (st.err) {
+          const info = await conn.getTransaction(sigs[i], { maxSupportedTransactionVersion: 0 }).catch(() => null);
+          throw new Error(`${label} failed: ${JSON.stringify(st.err)}\n${info?.meta?.logMessages?.join("\n") ?? ""}`);
+        }
+        if (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized") return sigs[i];
+      }
+      if (Date.now() - lastSend > 1500) {
+        lastSend = Date.now();
+        for (const r of raws) void conn.sendRawTransaction(r, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
+      }
+    }
+    lastErr = new Error(`${label} was not confirmed in ${(timeoutMs * (attempt + 1)) / 1000}s. The network may be congested; try again.`);
+  }
+  throw lastErr;
+}
+
 export const arenaPda = (id: BN) =>
   PublicKey.findProgramAddressSync([Buffer.from(SEEDS.arena), id.toArrayLike(Buffer, "le", 8)], PROGRAM_ID)[0];
 export const worldPda = (id: BN) =>
@@ -209,12 +252,17 @@ export class NightfallClient {
   // ───────────── transaction plumbing ─────────────
 
   async sendBase(ixs: TransactionInstruction[], signers: Keypair[] = []): Promise<string> {
-    const tx = new Transaction().add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 20_000 }), ...ixs);
-    tx.feePayer = this.publicKey;
-    return sendAndConfirmTransaction(this.base, tx, [this.keypair, ...signers], {
-      skipPreflight: true,
-      commitment: "confirmed",
-    });
+    return sendReliably(
+      this.base,
+      (blockhash) => {
+        const tx = new Transaction().add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }), ...ixs);
+        tx.feePayer = this.publicKey;
+        tx.recentBlockhash = blockhash;
+        tx.sign(this.keypair, ...signers);
+        return tx;
+      },
+      { label: "Solana transaction" },
+    );
   }
 
   private async erBlockhash(force = false) {
@@ -240,14 +288,18 @@ export class NightfallClient {
   /** ER transaction, confirmed. Throws with program logs if it failed. */
   async sendEr(ixs: TransactionInstruction[]): Promise<string> {
     const conn = await this.teeConn();
-    const tx = await this.buildEr(ixs);
-    const sig = await conn.sendRawTransaction(tx.serialize(), { skipPreflight: true });
-    const res = await conn.confirmTransaction(sig, "confirmed");
-    if (res.value.err) {
-      const info = await conn.getTransaction(sig, { maxSupportedTransactionVersion: 0 }).catch(() => null);
-      throw new Error(`ER tx ${sig} failed: ${JSON.stringify(res.value.err)}\n${info?.meta?.logMessages?.join("\n") ?? ""}`);
-    }
-    return sig;
+    return sendReliably(
+      conn,
+      (blockhash) => {
+        this.nonce = (this.nonce + 1) % 100_000;
+        const tx = new Transaction().add(ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 + this.nonce }), ...ixs);
+        tx.feePayer = this.publicKey;
+        tx.recentBlockhash = blockhash;
+        tx.sign(this.keypair);
+        return tx;
+      },
+      { timeoutMs: 12_000, label: "Rollup transaction" },
+    );
   }
 
   /** ER transaction, fire-and-forget — used for every step and swing during the match. */

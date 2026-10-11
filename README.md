@@ -141,28 +141,30 @@ outside it you burn → last one standing wins.
 
 ```mermaid
 flowchart LR
-  subgraph Browser["🧑 Player's browser"]
-    UI["three.js voxel client<br/>burner wallet"]
+  subgraph Browser["Player's browser"]
+    UI["three.js voxel client + burner wallet"]
   end
-  subgraph Solana["Solana devnet (base layer)"]
-    P["Nightfall program<br/>(Anchor 1.0)"]
-    V["Vault PDA<br/>stakes, never delegated"]
-    R["Registry PDA<br/>recent arenas"]
+  subgraph Solana["Solana devnet - base layer"]
+    P["Nightfall program - Anchor 1.0"]
+    V["Vault PDA - stakes, never delegated"]
+    R["Registry PDA - recent arenas"]
   end
-  subgraph TEE["MagicBlock Private ER · Intel TDX"]
-    A["Arena<br/>🌐 public: scoreboard, border, feed"]
-    W["World<br/>🔒 no readers: every x, y, hp, loot"]
-    VI["Vision[i]<br/>🔑 readable only by player i"]
-    B["Broadcast<br/>🌐 public, ~10 s delayed snapshot"]
+  subgraph TEE["MagicBlock Private ER - Intel TDX"]
+    A["Arena - public scoreboard, border, feed"]
+    W["World - sealed, NO readers"]
+    VI["Vision per player - readable only by its owner"]
+    B["Broadcast - public, about 10 s delayed"]
   end
-  UI -- "create / join / delegate" --> P
-  UI -- "act(move | attack | bow | power)<br/>~100 ms, gasless" --> W
-  W -- "recomputed every tx" --> VI
-  VI -- "auth-token RPC / websocket" --> UI
-  CR["⏱ MagicBlock crank"] -- "tick: border + broadcast" --> A
-  VRF["🎲 MagicBlock VRF"] -- "spawn callback" --> W
-  A -- "commit + undelegate" --> P
-  P -- "claim" --> V
+  CR["MagicBlock crank"]
+  VRF["MagicBlock VRF"]
+  UI -->|create, join, delegate| P
+  UI -->|act: move, attack, bow, power| W
+  W -->|recomputed every tx| VI
+  VI -->|auth-token RPC and websocket| UI
+  CR -->|tick: border and broadcast| A
+  VRF -->|spawn callback| W
+  A -->|commit and undelegate| P
+  P -->|claim| V
 ```
 
 ### Life of a match

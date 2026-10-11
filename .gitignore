@@ -3,3 +3,4 @@ node_modules
 .anchor
 **/.DS_Store
 app/dist
+.claude

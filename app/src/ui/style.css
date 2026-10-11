@@ -1535,3 +1535,98 @@ details.more[open] summary::before {
     font-size: 16px;
   }
 }
+
+.spectate-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  width: min(720px, calc(100vw - 24px));
+  pointer-events: auto;
+  font-size: 19px;
+  z-index: 15;
+}
+
+.live-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  background: #ff3030;
+  border-radius: 50%;
+  animation: blink 1s steps(2) infinite;
+}
+
+.spec-players {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.spec-p {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 17px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 2px solid #23283d;
+  cursor: pointer;
+}
+
+.spec-p.on {
+  border-color: #8fd8ff;
+}
+
+.spec-p.dead {
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+
+.spec-hp {
+  width: 48px;
+  height: 6px;
+  background: #3a1a1a;
+}
+
+.spec-hp span {
+  display: block;
+  height: 100%;
+  background: #e03030;
+}
+
+.mode-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.arena-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.arena-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 8px;
+  text-align: left;
+  background: rgba(0, 0, 0, 0.45);
+  border: 2px solid #23283d;
+  cursor: pointer;
+}
+
+.arena-row:hover,
+.arena-row.live {
+  border-color: #ff6060;
+}
+
+.arena-row .arena-swatch {
+  width: 36px;
+  height: 36px;
+}

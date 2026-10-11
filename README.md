@@ -39,6 +39,18 @@ ponds), **Frostpeak Ruins** (open snowfields, long bow lines) and **Ember Keep**
 | **Flare** (`E`) | See twice as far for 8 s, even into tall grass |
 
 Players get 10 s of spawn protection, and the four corners fill first so nobody spawns next to an enemy.
+The border waits 60 s, then closes one tile every 14 s (matches run ~2–3 minutes).
+
+**Night or day:** pick 🌙 Night (torchlight, ~4 tiles of sight) or ☀ Day (bright sky, ~7 tiles) per arena. Daylight
+still hides you behind walls and in tall grass.
+
+**Spectate without a code:** the spectate menu lists recent arenas from an onchain registry, live matches first.
+Spectators (and dead players) watch **every player** on a public broadcast that the TEE writes from snapshots taken
+~8–10 s earlier, like an esports broadcast delay. You get the whole picture, but a spectator can never feed a live
+position to someone still playing. Follow any player with ←/→, or `0` for the overview.
+
+**Bots with personalities:** each bot is an archer (keeps distance and lines up shots), a brawler (charges in) or a
+mix, so fights look different every time.
 
 | Key | Does |
 | --- | --- |

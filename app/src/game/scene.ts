@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { TEX, THEMES, themeTextures } from "./textures";
 import { Character, makeSword } from "./character";
 import { MAP_H, MAP_W, charAt, lineOfSight, mapId as currentMapId, setMap } from "../lib/map";
-import { VISION_R2 } from "../lib/config";
+import { DAY_R2, VISION_R2 } from "../lib/config";
 
 const mat = (map: THREE.Texture, extra: THREE.MeshLambertMaterialParameters = {}) =>
   new THREE.MeshLambertMaterial({ map, ...extra });
@@ -114,6 +114,7 @@ function buildSky(scene: THREE.Scene) {
   moon.position.set(-14, 34, -30);
   moon.lookAt(12, 0, 12);
   scene.add(moon);
+  return { stars, moon };
 }
 
 interface Particle {
@@ -130,6 +131,9 @@ export class ArenaScene {
   private ambient = new THREE.AmbientLight(0x6070a0, 0.32);
   private moonLight = new THREE.DirectionalLight(0x9fb0ff, 0.4);
   theme = 0;
+  private sky: { stars: THREE.Points; moon: THREE.Mesh } | null = null;
+  /** Daylight arenas: bright sky, longer sight, lighter fog of war. */
+  day = false;
   /** Vision radius² used for the cosmetic fog (bigger under a Flare). */
   viewR2 = VISION_R2;
   private torch = new THREE.PointLight(0xffb060, 30, 9, 1.6);
@@ -176,7 +180,7 @@ export class ArenaScene {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     container.appendChild(this.renderer.domElement);
 
-    buildSky(this.scene);
+    this.sky = buildSky(this.scene);
     this.scene.add(this.ambient);
     const moonLight = this.moonLight;
     moonLight.position.set(-8, 20, -6);
@@ -255,14 +259,41 @@ export class ArenaScene {
     this.terrain?.removeFromParent();
     this.terrain = buildTerrain(id);
     this.scene.add(this.terrain);
-    const th = THEMES[id];
-    (this.scene.background as THREE.Color).setHex(th.sky);
-    (this.scene.fog as THREE.Fog).color.setHex(th.fog);
-    this.ambient.color.setHex(th.ambient[0]);
-    this.ambient.intensity = th.ambient[1];
-    this.moonLight.color.setHex(th.moon[0]);
-    this.moonLight.intensity = th.moon[1];
+    this.applyLighting();
     this.explored.fill(0);
+  }
+
+  setDaylight(on: boolean) {
+    this.day = on;
+    this.viewR2 = on ? DAY_R2 : VISION_R2;
+    this.applyLighting();
+  }
+
+  private applyLighting() {
+    const th = THEMES[this.theme];
+    const fog = this.scene.fog as THREE.Fog;
+    if (this.sky) this.sky.stars.visible = this.sky.moon.visible = !this.day;
+    if (this.day) {
+      // Each theme keeps its mood by day: blue skies, pale frost, smoky red.
+      const sky = [0x8cc8ff, 0xcfe6f7, 0xc0705a][this.theme] ?? 0x8cc8ff;
+      (this.scene.background as THREE.Color).setHex(sky);
+      fog.color.setHex(sky);
+      fog.near = 22;
+      fog.far = 60;
+      this.ambient.color.setHex(0xffffff);
+      this.ambient.intensity = 0.95;
+      this.moonLight.color.setHex(0xfff2d8);
+      this.moonLight.intensity = 1.35;
+    } else {
+      (this.scene.background as THREE.Color).setHex(th.sky);
+      fog.color.setHex(th.fog);
+      fog.near = 16;
+      fog.far = 40;
+      this.ambient.color.setHex(th.ambient[0]);
+      this.ambient.intensity = th.ambient[1];
+      this.moonLight.color.setHex(th.moon[0]);
+      this.moonLight.intensity = th.moon[1];
+    }
   }
 
   private resize = () => {
@@ -300,12 +331,12 @@ export class ArenaScene {
         const dy = ty - y;
         const d2 = dx * dx + dy * dy;
         const k = ty * MAP_W + tx;
-        let a = this.explored[k] ? 175 : 232;
+        let a = this.day ? (this.explored[k] ? 95 : 150) : this.explored[k] ? 175 : 232;
         if (this.fullReveal) a = 0;
         else if (alive && d2 <= this.viewR2 && lineOfSight(x, y, tx, ty)) {
           a = Math.min(80, d2 * 3);
           this.explored[k] = 1;
-        } else if (alive && d2 <= this.viewR2 + 6) a = Math.min(a, 190);
+        } else if (alive && d2 <= this.viewR2 + 6) a = Math.min(a, this.day ? 110 : 190);
         // Texture row 0 is v = 0, which the -90° X rotation puts at the south edge (y = 23).
         const j = ((MAP_H - 1 - ty) * MAP_W + tx) * 4;
         this.fogData[j] = 2;
@@ -595,10 +626,11 @@ export class ArenaScene {
       const h = this.heroAt;
       const portrait = this.camera.aspect < 1;
       const sway = Math.sin(t * 0.18) * 0.6;
-      this.camera.position.set(h.x + 0.4 + sway, portrait ? 3.4 : 2.7, h.y + (portrait ? 7.4 : 4.8));
+      // High enough to clear a 2-block wall two tiles in front (Ember Keep's centre is walled in).
+      this.camera.position.set(h.x + 0.4 + sway, portrait ? 7 : 5, h.y + (portrait ? 6.6 : 4.6));
       // In portrait the UI fills the bottom half, so aim low to lift the hero into the top half.
-      if (portrait) this.camera.lookAt(h.x, -1.4, h.y + 1.3);
-      else this.camera.lookAt(h.x + 0.2, 0.95, h.y);
+      if (portrait) this.camera.lookAt(h.x, -2.2, h.y + 2.4);
+      else this.camera.lookAt(h.x + 0.2, 0.6, h.y);
     } else if (this.cameraMode === "overview") {
       // Whole arena from above, slowly drifting: for the post-match reveal.
       this.orbit += dt * 0.05;

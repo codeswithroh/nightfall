@@ -15,7 +15,7 @@ export const EPHEMERAL_VAULT_ID = new PublicKey("MagicVau1t999999999999999999999
 /** VRF oracle queue that lives inside the ephemeral rollup. */
 export const VRF_EPHEMERAL_QUEUE = new PublicKey("5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc");
 
-export const SEEDS = { arena: "arena", world: "world", vision: "vision", vault: "vault" } as const;
+export const SEEDS = { arena: "arena", world: "world", vision: "vision", vault: "vault", broadcast: "broadcast", registry: "registry" } as const;
 
 export const NAME_LEN = 12;
 export const MAX_PLAYERS = 6;
@@ -52,9 +52,12 @@ export const CHEST_LOOT_NAMES: Record<number, string> = {
 export const CAUSE = { sword: 1, bow: 2, border: 3 } as const;
 export const MAX_HP = 20;
 /** Mirrors logic.rs so the client can draw the border without asking anyone. */
-export const ZONE = { start: 12, min: 1, graceSecs: 40, shrinkSecs: 8 } as const;
+export const ZONE = { start: 12, min: 1, graceSecs: 60, shrinkSecs: 14 } as const;
 export const VISION_R2 = 20;
 export const FLARE_R2 = 64;
+export const DAY_R2 = 50;
+export const DAY_FLARE_R2 = 100;
+export const MODE = { night: 0, day: 1 } as const;
 /** Mirrors logic.rs: no player damage for the first seconds of a match. */
 export const SPAWN_SAFE_SECS = 10;
 

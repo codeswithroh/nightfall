@@ -8,6 +8,9 @@ pub const START_ARROWS: u8 = 3;
 pub const VISION_R2: i32 = 20;
 /// Under a Flare your sight reaches ≈8 tiles.
 pub const FLARE_R2: i32 = 64;
+/// Daylight arenas: ≈7 tiles of sight (≈10 under a Flare). Walls and tall grass still hide you.
+pub const DAY_R2: i32 = 50;
+pub const DAY_FLARE_R2: i32 = 100;
 /// You can hear (but not see) enemies within ~8 tiles.
 pub const HEARING_R2: i32 = 64;
 pub const BOW_DMG: u8 = 3;
@@ -23,8 +26,8 @@ pub const SPAWN_SAFE_SECS: i64 = 10;
 
 pub const ZONE_START: u8 = 12;
 pub const ZONE_MIN: u8 = 1;
-pub const ZONE_GRACE_SECS: i64 = 40;
-pub const ZONE_SHRINK_SECS: i64 = 8;
+pub const ZONE_GRACE_SECS: i64 = 60;
+pub const ZONE_SHRINK_SECS: i64 = 14;
 pub const ZONE_TICK_SECS: i64 = 2;
 pub const ZONE_DMG: u8 = 2;
 
@@ -383,7 +386,38 @@ pub fn tick(arena: &mut Arena, world: &mut World, now: i64) {
             damage(arena, world, j, ZONE_DMG, NONE, NONE, CAUSE_BORDER);
         }
     }
+    snapshot(world, now);
     check_winner(arena, now);
+}
+
+/// Push the current positions into the history ring (one per border tick).
+pub fn snapshot(world: &mut World, now: i64) {
+    let h = world.history_head as usize % HISTORY;
+    let mut snap = [0u8; 4 * MAX_PLAYERS];
+    for i in 0..MAX_PLAYERS {
+        snap[i] = world.x[i];
+        snap[MAX_PLAYERS + i] = world.y[i];
+        snap[2 * MAX_PLAYERS + i] = world.hp[i];
+        snap[3 * MAX_PLAYERS + i] = world.facing[i];
+    }
+    world.history[h] = snap;
+    world.history_ts[h] = now;
+    world.history_head = ((h + 1) % HISTORY) as u8;
+}
+
+/// Write the oldest snapshot (~10 s old) to the public broadcast.
+pub fn broadcast(world: &World, b: &mut Broadcast) {
+    let oldest = world.history_head as usize % HISTORY;
+    if world.history_ts[oldest] == 0 {
+        return; // not enough history yet: spectators wait for the delay to fill
+    }
+    let s = &world.history[oldest];
+    b.snapshot_ts = world.history_ts[oldest];
+    b.x.copy_from_slice(&s[..MAX_PLAYERS]);
+    b.y.copy_from_slice(&s[MAX_PLAYERS..2 * MAX_PLAYERS]);
+    b.hp.copy_from_slice(&s[2 * MAX_PLAYERS..3 * MAX_PLAYERS]);
+    b.facing.copy_from_slice(&s[3 * MAX_PLAYERS..]);
+    b.version = b.version.wrapping_add(1);
 }
 
 fn dist2(ax: u8, ay: u8, bx: u8, by: u8) -> i32 {
@@ -446,7 +480,13 @@ pub fn compute_vision(arena: &Arena, world: &World, i: usize, v: &mut Vision, no
     if !alive || !world.spawned {
         return;
     }
-    let r2 = if flare { FLARE_R2 } else { VISION_R2 };
+    let day = arena.mode == MODE_DAY;
+    let r2 = match (day, flare) {
+        (false, false) => VISION_R2,
+        (false, true) => FLARE_R2,
+        (true, false) => DAY_R2,
+        (true, true) => DAY_FLARE_R2,
+    };
     let sees = |x: u8, y: u8| dist2(mx, my, x, y) <= r2 && line_of_sight(m, mx as i32, my as i32, x as i32, y as i32);
 
     for j in 0..arena.player_count as usize {
@@ -508,6 +548,7 @@ mod tests {
             tick: 0,
             bump: 0,
             map_id: 0,
+            mode: 0,
         }
     }
 
@@ -532,6 +573,9 @@ mod tests {
             power: [0; MAX_PLAYERS],
             cloak_until: [0; MAX_PLAYERS],
             flare_until: [0; MAX_PLAYERS],
+            history: [[0; 4 * MAX_PLAYERS]; HISTORY],
+            history_ts: [0; HISTORY],
+            history_head: 0,
         }
     }
 
@@ -726,6 +770,40 @@ mod tests {
         compute_vision(&a, &w, 0, &mut v, 101);
         assert_eq!(v.seen_count, 1);
         assert_eq!(v.me[9], 7);
+    }
+
+    #[test]
+    fn broadcast_is_delayed_by_the_whole_history() {
+        let (mut a, mut w) = duel();
+        let mut b = Broadcast { arena_id: 1, snapshot_ts: 0, x: [0; 6], y: [0; 6], hp: [0; 6], facing: [0; 6], version: 0, bump: 0 };
+        a.start_ts = 0;
+        // Ticks every 2 s; player 0 walks one tile east per tick.
+        for k in 0..(HISTORY as i64 + 3) {
+            w.x[0] = 1 + k as u8;
+            snapshot(&mut w, 100 + 2 * k);
+            broadcast(&w, &mut b);
+            if k < HISTORY as i64 - 1 {
+                assert_eq!(b.snapshot_ts, 0, "no broadcast before the delay fills");
+            }
+        }
+        // Latest tick was k = HISTORY+2 at x = HISTORY+3; broadcast shows HISTORY-1 ticks earlier.
+        assert_eq!(b.x[0] as i64, 1 + 3);
+        assert_eq!(b.snapshot_ts, 100 + 2 * 3);
+    }
+
+    #[test]
+    fn daylight_sees_further_but_not_through_walls() {
+        let (mut a, mut w) = duel();
+        (w.x[0], w.y[0], w.x[1], w.y[1]) = (11, 11, 17, 11);
+        let mut v = vision();
+        compute_vision(&a, &w, 0, &mut v, 100);
+        assert_eq!(v.seen_count, 0);
+        a.mode = MODE_DAY;
+        compute_vision(&a, &w, 0, &mut v, 100);
+        assert_eq!(v.seen_count, 1);
+        (w.x[0], w.y[0], w.x[1], w.y[1]) = (2, 2, 2, 4);
+        compute_vision(&a, &w, 0, &mut v, 100);
+        assert_eq!(v.seen_count, 0);
     }
 
     #[test]

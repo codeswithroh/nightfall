@@ -1,6 +1,6 @@
 import { BN } from "../lib/anchor";
 import { ACTION, STATUS } from "../lib/config";
-import { DX, DY, firstStepToward, inZone, walkable } from "../lib/map";
+import { DX, DY, firstStepToward, inZone, tileAt, walkable } from "../lib/map";
 import { visionPda, type NightfallClient, type VisionState } from "../lib/nightfall";
 
 /**
@@ -14,6 +14,8 @@ export class Bot {
   private wander = Math.floor(Math.random() * 4);
   private lastAttack = 0;
   private startedAt = Date.now();
+  /** Each bot has a fighting style so fights look different: keep distance and shoot, charge in, or mix. */
+  readonly style: "archer" | "brawler" | "mixed" = (["archer", "brawler", "mixed"] as const)[Math.floor(Math.random() * 3)];
 
   constructor(
     readonly client: NightfallClient,
@@ -31,6 +33,17 @@ export class Bot {
     // Human-ish reaction time; each bot is a little different.
     const base = this.difficulty === "easy" ? 640 : 430;
     this.timer = setInterval(() => void this.think(), base + Math.random() * 160);
+  }
+
+  private clearLine(x: number, y: number, tx: number, ty: number) {
+    const d = tx === x ? (ty < y ? 0 : 2) : tx > x ? 1 : 3;
+    while (x !== tx || y !== ty) {
+      x += DX[d];
+      y += DY[d];
+      if (x === tx && y === ty) return true;
+      if (tileAt(x, y) === 1) return false;
+    }
+    return true;
   }
 
   dispose() {
@@ -60,24 +73,31 @@ export class Bot {
     const hesitate = Math.random() < (this.difficulty === "easy" ? 0.35 : 0.18);
     // Easy bots spend the opening looting and exploring instead of hunting.
     const calm = this.difficulty === "easy" && Date.now() - this.startedAt < 25_000;
-    // 1. Adjacent enemy → swing.
-    for (let d = 0; d < 4 && dir < 0 && !hesitate; d++)
-      if (occupied(mx + DX[d], my + DY[d]) && Date.now() - this.lastAttack > 260) {
+    // Archers (and mixed bots, half the time) prefer the bow while they have arrows.
+    const preferBow = arrows > 0 && (this.style === "archer" || (this.style === "mixed" && Math.random() < 0.5));
+    const lined = enemies.find((e) => (e.x === mx || e.y === my) && Math.abs(e.x - mx) + Math.abs(e.y - my) <= 6 && this.clearLine(mx, my, e.x, e.y));
+    const adjacent = [0, 1, 2, 3].find((d) => occupied(mx + DX[d], my + DY[d]));
+    const dirTo = (e: { x: number; y: number }) => (e.x === mx ? (e.y < my ? 0 : 2) : e.x > mx ? 1 : 3);
+    // 1. Lined up and we like arrows → shoot (archers even point-blank, to keep it varied).
+    if (!hesitate && preferBow && lined && Date.now() - this.lastAttack > 650) {
+      action = ACTION.bow;
+      dir = dirTo(lined);
+    }
+    // 2. Someone adjacent → swing (an archer first tries to back off a step).
+    if (dir < 0 && !hesitate && adjacent !== undefined && Date.now() - this.lastAttack > 260) {
+      const back = (adjacent + 2) % 4;
+      if (this.style === "archer" && arrows > 0 && walkable(mx + DX[back], my + DY[back]) && !occupied(mx + DX[back], my + DY[back]) && Math.random() < 0.6) {
+        dir = back;
+      } else {
         action = ACTION.sword;
-        dir = d;
+        dir = adjacent;
       }
-    // 2. Enemy in a straight line → shoot.
-    if (dir < 0 && !hesitate && arrows > 0 && Date.now() - this.lastAttack > 650)
-      for (const e of enemies) {
-        if (e.x === mx || e.y === my) {
-          const d = e.x === mx ? (e.y < my ? 0 : 2) : e.x > mx ? 1 : 3;
-          if (Math.abs(e.x - mx) + Math.abs(e.y - my) <= 6) {
-            action = ACTION.bow;
-            dir = d;
-            break;
-          }
-        }
-      }
+    }
+    // 2b. Not lined up yet: archers step to share a row or column at range instead of charging.
+    if (dir < 0 && !calm && preferBow && enemies.length) {
+      const e = enemies[0];
+      dir = firstStepToward(mx, my, (x, y) => (x === e.x || y === e.y) && Math.abs(x - e.x) + Math.abs(y - e.y) >= 2 && Math.abs(x - e.x) + Math.abs(y - e.y) <= 5, occupied);
+    }
     // 3. Outside / near the border → head for the centre.
     if (dir < 0 && !inZone(Math.max(1, v.zone - 1), mx, my))
       dir = firstStepToward(mx, my, (x, y) => inZone(Math.max(1, v.zone - 2), x, y), occupied);

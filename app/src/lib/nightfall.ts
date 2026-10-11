@@ -53,6 +53,25 @@ export interface ArenaState {
   feedSeq: number;
   tick: number;
   mapId: number;
+  mode: number;
+}
+
+export interface BroadcastState {
+  arenaId: BN;
+  snapshotTs: BN;
+  x: number[];
+  y: number[];
+  hp: number[];
+  facing: number[];
+  version: number;
+}
+
+export interface RegistryState {
+  ids: BN[];
+  maps: number[];
+  modes: number[];
+  created: BN[];
+  head: number;
 }
 
 export interface VisionState {
@@ -192,6 +211,9 @@ export const visionPda = (id: BN, slot: number) =>
     [Buffer.from(SEEDS.vision), id.toArrayLike(Buffer, "le", 8), Buffer.from([slot])],
     PROGRAM_ID,
   )[0];
+export const broadcastPda = (id: BN) =>
+  PublicKey.findProgramAddressSync([Buffer.from(SEEDS.broadcast), id.toArrayLike(Buffer, "le", 8)], PROGRAM_ID)[0];
+export const registryPda = () => PublicKey.findProgramAddressSync([Buffer.from(SEEDS.registry)], PROGRAM_ID)[0];
 export const vaultPda = (id: BN) =>
   PublicKey.findProgramAddressSync([Buffer.from(SEEDS.vault), id.toArrayLike(Buffer, "le", 8)], PROGRAM_ID)[0];
 
@@ -331,6 +353,24 @@ export class NightfallClient {
     return this.program.coder.accounts.decode("vision", data) as VisionState;
   }
 
+  decodeBroadcast(data: Buffer) {
+    return this.program.coder.accounts.decode("broadcast", data) as BroadcastState;
+  }
+
+  /** Recently opened arenas, newest first. */
+  async fetchRegistry(): Promise<{ id: BN; map: number; mode: number; created: number }[]> {
+    const info = await this.base.getAccountInfo(registryPda()).catch(() => null);
+    if (!info) return [];
+    const r = this.program.coder.accounts.decode("registry", info.data) as RegistryState;
+    const out = [];
+    for (let k = 1; k <= r.ids.length; k++) {
+      const i = (r.head - k + r.ids.length) % r.ids.length;
+      if (r.ids[i].isZero()) continue;
+      out.push({ id: r.ids[i], map: r.maps[i], mode: r.modes[i], created: r.created[i].toNumber() });
+    }
+    return out;
+  }
+
   decodeWorld(data: Buffer) {
     return this.program.coder.accounts.decode("world", data) as WorldState;
   }
@@ -386,13 +426,15 @@ export class NightfallClient {
       .instruction();
   }
 
-  async createArena(id: BN, stakeLamports: BN, maxPlayers: number, name: string, skin: number, mapId = 0) {
+  async createArena(id: BN, stakeLamports: BN, maxPlayers: number, name: string, skin: number, mapId = 0, mode = 0) {
     const create = await this.program.methods
-      .createArena(id, stakeLamports, maxPlayers, encodeName(name), skin, mapId)
+      .createArena(id, stakeLamports, maxPlayers, encodeName(name), skin, mapId, mode)
       .accountsPartial({
         arena: arenaPda(id),
         world: worldPda(id),
         vision: visionPda(id, 0),
+        broadcast: broadcastPda(id),
+        registry: registryPda(),
         vault: vaultPda(id),
         host: this.publicKey,
       })
@@ -477,6 +519,7 @@ export class NightfallClient {
       await this.sendBase([
         await this.delegateIx({ arena: { arenaId: id } }, arenaPda(id)),
         await this.delegateIx({ world: { arenaId: id } }, worldPda(id)),
+        await this.delegateIx({ broadcast: { arenaId: id } }, broadcastPda(id)),
       ]);
     }
     await this.waitOnEr(arenaPda(id));
@@ -489,9 +532,11 @@ export class NightfallClient {
     }
 
     log("Sealing the world inside the enclave…");
+    await this.waitOnEr(broadcastPda(id));
     const permIxs = [
       await this.initPermissionIx({ arena: { arenaId: id } }, arenaPda(id)),
       await this.initPermissionIx({ world: { arenaId: id } }, worldPda(id)),
+      await this.initPermissionIx({ broadcast: { arenaId: id } }, broadcastPda(id)),
     ];
     for (let s = 0; s < n; s++) permIxs.push(await this.initPermissionIx({ vision: { arenaId: id, slot: s } }, visionPda(id, s)));
     // A handful per transaction keeps us under the size limit.
@@ -566,7 +611,7 @@ export class NightfallClient {
     return this.sendEr([
       await this.program.methods
         .scheduleTicks(taskId, new BN(1000), new BN(600))
-        .accountsPartial({ payer: this.publicKey, arena: arenaPda(id), world: worldPda(id), magicProgram: MAGIC_PROGRAM_ID })
+        .accountsPartial({ payer: this.publicKey, arena: arenaPda(id), world: worldPda(id), broadcast: broadcastPda(id), magicProgram: MAGIC_PROGRAM_ID })
         .remainingAccounts(visions)
         .instruction(),
     ]);
@@ -601,6 +646,7 @@ export class NightfallClient {
       keys: [
         { pubkey: arenaPda(id), isSigner: false, isWritable: true },
         { pubkey: worldPda(id), isSigner: false, isWritable: true },
+        { pubkey: broadcastPda(id), isSigner: false, isWritable: true },
         ...this.visionMetas(id, playerCount),
       ],
       data: this.program.coder.instruction.encode("tick", {}),

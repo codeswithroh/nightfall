@@ -13,13 +13,17 @@ import {
   CHEST_LOOT_NAMES,
   FLARE_R2,
   VISION_R2,
+  DAY_R2,
+  DAY_FLARE_R2,
   explorerAddress,
   explorerTx,
 } from "../lib/config";
 import { DX, DY, MAP_W, ROWS, firstStepToward, inZone, tileAt, walkable } from "../lib/map";
 import {
   arenaPda,
+  broadcastPda,
   decodeName,
+  type BroadcastState,
   type ArenaState,
   type NightfallClient,
   type VisionState,
@@ -102,6 +106,10 @@ export class MatchSession {
   private aliveAtDeath = 0;
   private minimap!: HTMLCanvasElement;
   private lastSeenAt = new Map<number, { x: number; y: number; t: number }>();
+  /** Spectating (or dead): we render the public, ~8 s delayed broadcast of every player. */
+  private watching = false;
+  private broadcast: BroadcastState | null = null;
+  private followSlot = -1;
 
   constructor(private o: SessionOptions) {}
 
@@ -124,6 +132,7 @@ export class MatchSession {
     if (arenaInfo) this.onArena(me.decodeArena(arenaInfo.data));
     this.stops.push(await me.watch(arenaPda(arenaId), (d) => this.onArena(me.decodeArena(d)), 700));
     if (slot >= 0) this.stops.push(await me.watch(visionPda(arenaId, slot), (d) => this.onVision(me.decodeVision(d)), 250));
+    else await this.startWatching();
 
     this.bindInput();
     scene.onFrame = (dt) => this.frame(dt);
@@ -196,6 +205,7 @@ export class MatchSession {
     this.arena = a;
     if (first) {
       this.o.scene.setMap(a.mapId ?? 0);
+      this.o.scene.setDaylight(a.mode === 1);
       this.minimapBase = null;
     }
     if (a.tick !== this.lastTick) {
@@ -241,6 +251,8 @@ export class MatchSession {
 
     if (a.status >= STATUS.ended && !this.ended) {
       this.ended = true;
+      const d = this.hud.querySelector("[data-delay]");
+      if (d) d.textContent = "· match over";
       setTimeout(() => this.showEnd(), 900);
     }
     if (this.spectator && a.status === STATUS.live && first) this.banner("SPECTATING", "The night hides every player — even from you.", 4000);
@@ -359,7 +371,7 @@ export class MatchSession {
       this.ghosts.delete(slot);
     }
     for (const [slot, c] of scene.characters) {
-      if (slot === this.o.slot || visible.has(slot) || this.ended) continue;
+      if (slot >= 100 || slot === this.o.slot || visible.has(slot) || this.ended || this.watching) continue;
       const diedNow = this.arena && !((this.arena.alive >> slot) & 1);
       if (diedNow && !this.dyingUntil.has(slot)) {
         c.die();
@@ -645,11 +657,16 @@ export class MatchSession {
     if (this.me && this.alive) {
       const v = this.vision!;
       this.me.setGhost(v.me[8] > 0);
-      this.o.scene.viewR2 = v.me[9] > 0 ? FLARE_R2 : VISION_R2;
+      const day = this.arena?.mode === 1;
+      this.o.scene.viewR2 = v.me[9] > 0 ? (day ? DAY_FLARE_R2 : FLARE_R2) : day ? DAY_R2 : VISION_R2;
       this.me.target.copy(this.pred);
       this.me.facing = this.facing;
       this.o.scene.setTorch(this.me.pos.x, this.me.pos.y, true);
       this.o.scene.setViewer(Math.round(this.pred.x), Math.round(this.pred.y), true);
+    } else if (this.watching) {
+      const c = this.followSlot >= 0 ? this.o.scene.characters.get(300 + this.followSlot) : null;
+      this.o.scene.follow = c ? c.pos : null;
+      this.o.scene.cameraMode = c ? "game" : "overview";
     } else if (!this.revealed) {
       this.o.scene.setTorch(0, 0, false);
       this.o.scene.setViewer(-100, -100, false);
@@ -845,6 +862,102 @@ export class MatchSession {
     }
   }
 
+  // ───────────── spectating (delayed broadcast) ─────────────
+
+  async startWatching() {
+    if (this.watching) return;
+    this.watching = true;
+    const { scene, me, arenaId } = this.o;
+    scene.clearFog();
+    scene.setTorch(0, 0, false);
+    // Hide everything Vision-driven; the broadcast takes over.
+    for (const [slot, c] of [...scene.characters]) if (slot < 100 && slot !== this.o.slot) {
+      c.dispose();
+      scene.characters.delete(slot);
+    }
+    if (this.me && !this.alive) {
+      this.me.dispose();
+      scene.characters.delete(this.o.slot);
+      this.me = null;
+    }
+    this.hud.querySelector<HTMLElement>(".bottom")?.style.setProperty("display", "none");
+    this.hud.querySelector<HTMLElement>(".touch")?.style.setProperty("display", "none");
+    const bar = document.createElement("div");
+    bar.className = "spectate-bar panel";
+    bar.innerHTML = `<div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:6px">
+        <span><span class="live-dot"></span><b>LIVE</b> <span class="muted" data-delay>· waiting for the broadcast…</span></span>
+        <span class="muted hide-touch">${key("←")}${key("→")} follow player · ${key("0")} overview</span>
+      </div>
+      <div class="spec-players" data-players></div>
+      <div class="muted" style="font-size:16px">Spectators watch on a short delay, like an esports broadcast, so nobody can feed live positions to a player.</div>`;
+    this.hud.appendChild(bar);
+    bar.querySelector("[data-players]")!.addEventListener("click", (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLElement>("[data-follow]");
+      if (b) this.followSlot = Number(b.dataset.follow);
+    });
+    window.addEventListener("keydown", this.onWatchKey);
+    this.stops.push(() => window.removeEventListener("keydown", this.onWatchKey));
+    const conn = await me.teeConn();
+    const info = await conn.getAccountInfo(broadcastPda(arenaId)).catch(() => null);
+    if (info) this.onBroadcast(me.decodeBroadcast(info.data));
+    this.stops.push(await me.watch(broadcastPda(arenaId), (d) => this.onBroadcast(me.decodeBroadcast(d)), 700));
+    if (this.spectator) this.banner("SPECTATING", "Watching every player on a short delay", 2600);
+  }
+
+  private onWatchKey = (e: KeyboardEvent) => {
+    const a = this.arena;
+    if (!a || !this.watching) return;
+    const alive = Array.from({ length: a.playerCount }, (_, i) => i).filter((i) => (this.broadcast?.hp[i] ?? 0) > 0);
+    if (e.key === "0") this.followSlot = -1;
+    else if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+      if (!alive.length) return;
+      const idx = alive.indexOf(this.followSlot);
+      const step = e.key === "ArrowRight" ? 1 : -1;
+      this.followSlot = alive[(idx + step + alive.length) % alive.length];
+    } else if (/^[1-6]$/.test(e.key)) this.followSlot = Number(e.key) - 1;
+  };
+
+  private onBroadcast(b: BroadcastState) {
+    const a = this.arena;
+    if (!a || this.revealed) return;
+    this.broadcast = b;
+    const { scene } = this.o;
+    const ts = b.snapshotTs.toNumber();
+    const delayEl = this.hud.querySelector<HTMLElement>("[data-delay]");
+    if (delayEl && !this.ended) delayEl.textContent = ts ? `· ${Math.max(0, Math.round(Date.now() / 1000 - ts))}s delay` : "· broadcast starts a few seconds into the match";
+    if (!ts) return;
+    for (let i = 0; i < a.playerCount; i++) {
+      const key = 300 + i;
+      let c = scene.characters.get(key);
+      const hp = b.hp[i];
+      if (!c && hp > 0) {
+        c = new Character(a.skins[i], `${this.name(i)}`, this.skinColor(i));
+        c.setRing(0x8fd8ff);
+        c.place(b.x[i], b.y[i], b.facing[i]);
+        scene.scene.add(c.root);
+        scene.characters.set(key, c);
+      }
+      if (!c) continue;
+      if (hp === 0 && !c.dead) {
+        c.die();
+        scene.burst(c.pos.x, 0.6, c.pos.y, 0xffffff, 14);
+        continue;
+      }
+      c.target.set(b.x[i], b.y[i]);
+      c.facing = b.facing[i];
+    }
+    if (this.followSlot >= 0 && b.hp[this.followSlot] === 0) this.followSlot = -1;
+    const list = this.hud.querySelector("[data-players]");
+    if (list)
+      list.innerHTML = Array.from({ length: a.playerCount }, (_, i) => {
+        const hp = b.hp[i];
+        return `<button class="spec-p ${this.followSlot === i ? "on" : ""} ${hp ? "" : "dead"}" data-follow="${i}">
+          <b style="color:${this.skinColor(i)}">${esc(this.name(i))}</b>
+          <span class="spec-hp"><span style="width:${(hp / MAX_HP) * 100}%"></span></span>
+          <span class="muted">${a.kills[i]}⚔</span></button>`;
+      }).join("");
+  }
+
   // ───────────── HUD ─────────────
 
   private buildHud() {
@@ -857,7 +970,7 @@ export class MatchSession {
         <div class="pill" data-alive>waiting</div>
         <div class="pill" data-kills></div>
         <div class="pill border-warn" data-zone>Border: —</div>
-        <div class="pill muted" data-xy style="font-size:11px">XY —</div>
+        <div class="pill muted" data-xy style="font-size:11px${this.spectator ? ";display:none" : ""}">XY —</div>
 
       </div>
       <div class="top-right">
@@ -1038,7 +1151,10 @@ export class MatchSession {
       <div class="row">${this.o.onPlayAgain ? `<button class="btn primary" data-again>▶ Play again</button>` : ""}<button class="btn" data-spec>Spectate</button><button class="btn" data-menu>Title screen</button></div>`;
     this.hud.appendChild(el);
     el.querySelector("[data-again]")?.addEventListener("click", () => this.o.onPlayAgain?.());
-    h(el, "[data-spec]").addEventListener("click", () => el.remove());
+    h(el, "[data-spec]").addEventListener("click", () => {
+      el.remove();
+      void this.startWatching();
+    });
     h(el, "[data-menu]").addEventListener("click", () => this.o.onExit());
   }
 
@@ -1112,6 +1228,11 @@ export class MatchSession {
     const a = this.arena!;
     const { scene } = this.o;
     this.revealed = true;
+    for (const k of [...scene.characters.keys()]) if (k >= 300) {
+      scene.characters.get(k)!.dispose();
+      scene.characters.delete(k);
+    }
+    this.hud.querySelector(".spectate-bar")?.remove();
     scene.clearFog();
     scene.setTorch(0, 0, false);
     for (let s = 0; s < a.playerCount; s++) {

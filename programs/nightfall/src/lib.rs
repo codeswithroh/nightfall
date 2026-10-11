@@ -31,6 +31,8 @@ pub const ARENA_SEED: &[u8] = b"arena";
 pub const WORLD_SEED: &[u8] = b"world";
 pub const VISION_SEED: &[u8] = b"vision";
 pub const VAULT_SEED: &[u8] = b"vault";
+pub const BROADCAST_SEED: &[u8] = b"broadcast";
+pub const REGISTRY_SEED: &[u8] = b"registry";
 /// Seconds the host must wait for the VRF callback before falling back to TEE-local entropy.
 pub const SPAWN_FALLBACK_SECS: i64 = 8;
 
@@ -51,12 +53,14 @@ pub mod nightfall {
         name: [u8; NAME_LEN],
         skin: u8,
         map_id: u8,
+        mode: u8,
     ) -> Result<()> {
         let payer = &ctx.accounts.host;
         let sys = ctx.accounts.system_program.key();
         fund(sys, payer, &ctx.accounts.arena.to_account_info(), EphemeralPermission::size_of(0))?;
         fund(sys, payer, &ctx.accounts.world.to_account_info(), EphemeralPermission::size_of(0))?;
         fund(sys, payer, &ctx.accounts.vision.to_account_info(), EphemeralPermission::size_of(1))?;
+        fund(sys, payer, &ctx.accounts.broadcast.to_account_info(), EphemeralPermission::size_of(0))?;
         if stake > 0 {
             transfer(
                 CpiContext::new(sys, Transfer { from: payer.to_account_info(), to: ctx.accounts.vault.to_account_info() }),
@@ -78,6 +82,20 @@ pub mod nightfall {
         arena.zone = logic::ZONE_START;
         arena.bump = ctx.bumps.arena;
         arena.map_id = map_id % map::MAP_COUNT as u8;
+        arena.mode = mode.min(MODE_DAY);
+
+        let b = &mut ctx.accounts.broadcast;
+        b.arena_id = arena_id;
+        b.bump = ctx.bumps.broadcast;
+
+        let r = &mut ctx.accounts.registry;
+        r.bump = ctx.bumps.registry;
+        let h = r.head as usize % REGISTRY_LEN;
+        r.ids[h] = arena_id;
+        r.maps[h] = arena.map_id;
+        r.modes[h] = arena.mode;
+        r.created[h] = Clock::get()?.unix_timestamp;
+        r.head = ((h + 1) % REGISTRY_LEN) as u8;
 
         let world = &mut ctx.accounts.world;
         world.arena_id = arena_id;
@@ -147,7 +165,7 @@ pub mod nightfall {
         let refs: Vec<&[u8]> = seeds.iter().map(|s| s.as_slice()).collect();
 
         let (is_private, members) = match account_type {
-            AccountType::Arena { .. } => (false, vec![]),
+            AccountType::Arena { .. } | AccountType::Broadcast { .. } => (false, vec![]),
             AccountType::World { .. } => (true, vec![]),
             AccountType::Vision { .. } => {
                 let data = ctx.accounts.permissioned_account.try_borrow_data()?;
@@ -262,6 +280,7 @@ pub mod nightfall {
         let world = &mut ctx.accounts.world;
         let now = Clock::get()?.unix_timestamp;
         logic::tick(arena, world, now);
+        logic::broadcast(world, &mut ctx.accounts.broadcast);
         refresh_visions(arena, world, ctx.remaining_accounts, now)
     }
 
@@ -270,6 +289,7 @@ pub mod nightfall {
         let mut metas = vec![
             AccountMeta::new(ctx.accounts.arena.key(), false),
             AccountMeta::new(ctx.accounts.world.key(), false),
+            AccountMeta::new(ctx.accounts.broadcast.key(), false),
         ];
         metas.extend(ctx.remaining_accounts.iter().map(|a| AccountMeta::new(a.key(), false)));
         let tick_ix = Instruction {
@@ -277,7 +297,11 @@ pub mod nightfall {
             accounts: metas,
             data: anchor_lang::InstructionData::data(&instruction::Tick {}),
         };
-        let mut accounts = vec![ctx.accounts.arena.to_account_info(), ctx.accounts.world.to_account_info()];
+        let mut accounts = vec![
+            ctx.accounts.arena.to_account_info(),
+            ctx.accounts.world.to_account_info(),
+            ctx.accounts.broadcast.to_account_info(),
+        ];
         accounts.extend(ctx.remaining_accounts.iter().cloned());
         ScheduleCrankCpi {
             payer: &ctx.accounts.payer,
@@ -412,6 +436,7 @@ fn seeds_for(t: &AccountType) -> Vec<Vec<u8>> {
         AccountType::Vision { arena_id, slot } => {
             vec![VISION_SEED.to_vec(), arena_id.to_le_bytes().to_vec(), vec![*slot]]
         }
+        AccountType::Broadcast { arena_id } => vec![BROADCAST_SEED.to_vec(), arena_id.to_le_bytes().to_vec()],
     }
 }
 
@@ -426,6 +451,10 @@ pub struct CreateArena<'info> {
     pub world: Account<'info, World>,
     #[account(init, payer = host, space = 8 + Vision::LEN, seeds = [VISION_SEED, &arena_id.to_le_bytes(), &[0u8]], bump)]
     pub vision: Account<'info, Vision>,
+    #[account(init, payer = host, space = 8 + Broadcast::LEN, seeds = [BROADCAST_SEED, &arena_id.to_le_bytes()], bump)]
+    pub broadcast: Account<'info, Broadcast>,
+    #[account(init_if_needed, payer = host, space = 8 + Registry::LEN, seeds = [REGISTRY_SEED], bump)]
+    pub registry: Account<'info, Registry>,
     #[account(mut, seeds = [VAULT_SEED, &arena_id.to_le_bytes()], bump)]
     pub vault: SystemAccount<'info>,
     #[account(mut)]
@@ -535,6 +564,8 @@ pub struct Tick<'info> {
     pub arena: Account<'info, Arena>,
     #[account(mut, seeds = [WORLD_SEED, &arena.arena_id.to_le_bytes()], bump = world.bump)]
     pub world: Account<'info, World>,
+    #[account(mut, seeds = [BROADCAST_SEED, &arena.arena_id.to_le_bytes()], bump = broadcast.bump)]
+    pub broadcast: Account<'info, Broadcast>,
 }
 
 #[derive(Accounts)]
@@ -547,6 +578,9 @@ pub struct ScheduleTicks<'info> {
     /// CHECK: passed through to the scheduled instruction
     #[account(mut)]
     pub world: UncheckedAccount<'info>,
+    /// CHECK: passed through to the scheduled instruction
+    #[account(mut)]
+    pub broadcast: UncheckedAccount<'info>,
     /// CHECK: magic program
     #[account(address = MAGIC_PROGRAM_ID)]
     pub magic_program: UncheckedAccount<'info>,

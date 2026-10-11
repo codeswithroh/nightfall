@@ -7,6 +7,11 @@ pub const MAX_SEEN: usize = 5;
 pub const MAX_SHOTS: usize = 4;
 pub const FEED_LEN: usize = 5;
 pub const NONE: u8 = 255;
+/// Snapshots kept for the spectator broadcast (one per border tick ≈ 2 s → ~10 s delay).
+pub const HISTORY: usize = 5;
+pub const REGISTRY_LEN: usize = 16;
+pub const MODE_NIGHT: u8 = 0;
+pub const MODE_DAY: u8 = 1;
 
 pub const STATUS_LOBBY: u8 = 0;
 pub const STATUS_SPAWNING: u8 = 1;
@@ -43,6 +48,8 @@ pub struct Arena {
     pub bump: u8,
     /// Which arena map (see map.rs).
     pub map_id: u8,
+    /// 0 night (torchlight), 1 daylight (longer sight).
+    pub mode: u8,
 }
 
 impl Arena {
@@ -58,6 +65,7 @@ impl Arena {
         + 3 * FEED_LEN
         + 2
         + 4
+        + 1
         + 1
         + 1;
 
@@ -96,11 +104,51 @@ pub struct World {
     pub power: [u8; MAX_PLAYERS],
     pub cloak_until: [i64; MAX_PLAYERS],
     pub flare_until: [i64; MAX_PLAYERS],
+    /// Ring of past snapshots: [x×6, y×6, hp×6, facing×6]. Feeds the delayed broadcast.
+    pub history: [[u8; 4 * MAX_PLAYERS]; HISTORY],
+    pub history_ts: [i64; HISTORY],
+    pub history_head: u8,
 }
 
 impl World {
-    pub const LEN: usize =
-        8 + MAX_PLAYERS * 8 + 8 * MAX_PLAYERS + 4 * MAX_CHESTS + 6 * MAX_SHOTS + 1 + 1 + 1 + 1 + MAX_PLAYERS + 16 * MAX_PLAYERS;
+    pub const LEN: usize = 8 + MAX_PLAYERS * 8 + 8 * MAX_PLAYERS + 4 * MAX_CHESTS + 6 * MAX_SHOTS + 1 + 1 + 1 + 1 + MAX_PLAYERS + 16 * MAX_PLAYERS
+        + 4 * MAX_PLAYERS * HISTORY
+        + 8 * HISTORY
+        + 1;
+}
+
+/// What spectators see: everyone's position from ~10 seconds ago. Public by design; the delay
+/// means a spectator can never feed a live position to a player.
+#[account]
+pub struct Broadcast {
+    pub arena_id: u64,
+    /// When this snapshot was taken (0 = nothing yet).
+    pub snapshot_ts: i64,
+    pub x: [u8; MAX_PLAYERS],
+    pub y: [u8; MAX_PLAYERS],
+    pub hp: [u8; MAX_PLAYERS],
+    pub facing: [u8; MAX_PLAYERS],
+    pub version: u32,
+    pub bump: u8,
+}
+
+impl Broadcast {
+    pub const LEN: usize = 8 + 8 + 4 * MAX_PLAYERS + 4 + 1;
+}
+
+/// Public list of recently opened arenas, so spectators can browse without a code.
+#[account]
+pub struct Registry {
+    pub ids: [u64; REGISTRY_LEN],
+    pub maps: [u8; REGISTRY_LEN],
+    pub modes: [u8; REGISTRY_LEN],
+    pub created: [i64; REGISTRY_LEN],
+    pub head: u8,
+    pub bump: u8,
+}
+
+impl Registry {
+    pub const LEN: usize = 8 * REGISTRY_LEN + REGISTRY_LEN * 2 + 8 * REGISTRY_LEN + 2;
 }
 
 /// What one player is allowed to know. Readable only by that player's wallet.
@@ -139,4 +187,5 @@ pub enum AccountType {
     Arena { arena_id: u64 },
     World { arena_id: u64 },
     Vision { arena_id: u64, slot: u8 },
+    Broadcast { arena_id: u64 },
 }

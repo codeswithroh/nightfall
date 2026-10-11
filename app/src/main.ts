@@ -37,6 +37,8 @@ kv.set("nightfall-name", myName);
 /** Packed look (skin + hat + cape) — see packLook. */
 let mySkin = Number(kv.get("nightfall-skin") ?? Math.floor(Math.random() * SKINS.length)) % 210;
 let myMap = Number(kv.get("nightfall-map") ?? "0") % MAPS.length;
+/** 0 night (torchlight), 1 daylight. */
+let myMode = Number(kv.get("nightfall-mode") ?? "0") === 1 ? 1 : 0;
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 const toast = (msg: string, err = false) => {
@@ -100,6 +102,7 @@ function stageHero() {
   heroChar?.dispose();
   for (const k of [...scene.characters.keys()]) if (k >= 100) scene.characters.delete(k);
   scene.setMap(myMap);
+  scene.setDaylight(myMode === 1);
   scene.clearFog();
   scene.zoneTarget = 12;
   scene.heroAt.set(11, 12);
@@ -216,7 +219,7 @@ function friendsModal() {
     b.innerHTML = `<span class="spinner"></span> Opening arena…`;
     try {
       const id = new BN(Date.now()).muln(10).addn(Math.floor(Math.random() * 10));
-      await me.createArena(id, new BN(Math.round(stake * LAMPORTS_PER_SOL)), MAX_PLAYERS, myName, mySkin, myMap);
+      await me.createArena(id, new BN(Math.round(stake * LAMPORTS_PER_SOL)), MAX_PLAYERS, myName, mySkin, myMap, myMode);
       kv.set(`nightfall-host-${id}`, "1");
       void me.sealMyVision(id, 0).catch(() => {});
       m.remove();
@@ -280,6 +283,10 @@ function home() {
 
     <aside class="ts-arenas panel">
       <div class="label">Choose your arena</div>
+      <div class="mode-toggle" role="group" aria-label="Time of day">
+        <button class="chip ${myMode === 0 ? "on" : ""}" data-mode="0" title="Torchlight only: ~4 tiles of sight">🌙 NIGHT</button>
+        <button class="chip ${myMode === 1 ? "on" : ""}" data-mode="1" title="Daylight: ~7 tiles of sight">☀ DAY</button>
+      </div>
       ${THEMES.map(
         (t, i) => `<button class="arena-card ${i === myMap ? "on" : ""}" data-map="${i}" style="--accent:${t.accent}">
           <span class="arena-swatch" style="background:linear-gradient(135deg, ${t.top}, ${t.wall} 55%, ${t.liquid})"></span>
@@ -352,6 +359,15 @@ function home() {
     }),
   );
 
+  el.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach((b) =>
+    b.addEventListener("click", () => {
+      myMode = Number(b.dataset.mode);
+      kv.set("nightfall-mode", String(myMode));
+      el.querySelectorAll("[data-mode]").forEach((x) => x.classList.toggle("on", x === b));
+      scene.setDaylight(myMode === 1);
+      sfx.click();
+    }),
+  );
   el.querySelector("[data-play]")!.addEventListener("click", async (e) => {
     sfx.unlock();
     const b = e.currentTarget as HTMLButtonElement;
@@ -366,17 +382,52 @@ function home() {
   });
   el.querySelector("[data-friends]")!.addEventListener("click", friendsModal);
   el.querySelector("[data-how]")!.addEventListener("click", howModal);
-  el.querySelector("[data-watch]")!.addEventListener("click", () => {
-    const m = modal(`<div class="label">Spectate an arena</div>
-      <p class="muted">Spectators see the map, the border and the kill feed, but never a single player. That's the point.</p>
-      <div class="grid2"><input class="field" data-code placeholder="Arena code" inputmode="numeric"/><button class="btn" data-go>Watch</button></div>`);
-    m.querySelector("[data-go]")!.addEventListener("click", () => {
-      const code = m.querySelector<HTMLInputElement>("[data-code]")!.value.trim();
-      if (!/^\d+$/.test(code)) return toast("Enter the arena code.", true);
-      m.remove();
-      void spectate(new BN(code));
-    });
+  el.querySelector("[data-watch]")!.addEventListener("click", spectateModal);
+}
+
+/** Browse recent arenas (from the onchain registry) and pick one to watch. */
+async function spectateModal() {
+  const m = modal(`<div class="label">Spectate</div>
+    <p class="muted" style="margin-top:0">Watch every player on a short broadcast delay. Live matches first.</p>
+    <div class="arena-list" data-list><span class="spinner"></span> Finding matches…</div>
+    <div class="label" style="margin-top:10px">Or enter a code</div>
+    <div class="grid2"><input class="field" data-code placeholder="Arena code" inputmode="numeric"/><button class="btn" data-go>Watch</button></div>`);
+  const go = (id: BN) => {
+    m.remove();
+    void spectate(id);
+  };
+  m.querySelector("[data-go]")!.addEventListener("click", () => {
+    const code = m.querySelector<HTMLInputElement>("[data-code]")!.value.trim();
+    if (!/^\d+$/.test(code)) return toast("Enter the arena code.", true);
+    go(new BN(code));
   });
+  const list = m.querySelector<HTMLElement>("[data-list]")!;
+  const entries = await me.fetchRegistry().catch(() => []);
+  const rows = await Promise.all(
+    entries.slice(0, 10).map(async (e) => ({ e, found: await me.fetchArena(e.id).catch(() => null) })),
+  );
+  const label = ["lobby", "starting", "LIVE", "ended", "paid out"];
+  const sorted = rows
+    .filter((r) => r.found)
+    .sort((a, b) => (b.found!.arena.status === STATUS.live ? 1 : 0) - (a.found!.arena.status === STATUS.live ? 1 : 0));
+  if (!sorted.length) {
+    list.innerHTML = `<p class="muted">No arenas yet. Start one with ▶ PLAY and send a friend here.</p>`;
+    return;
+  }
+  list.innerHTML = sorted
+    .map(({ e, found }) => {
+      const a = found!.arena;
+      const alive = Array.from({ length: a.playerCount }, (_, i) => (a.alive >> i) & 1).reduce((x, y) => x + y, 0);
+      const live = a.status === STATUS.live;
+      const ago = Math.max(1, Math.round((Date.now() / 1000 - e.created) / 60));
+      return `<button class="arena-row ${live ? "live" : ""}" data-id="${e.id}">
+        <span class="arena-swatch" style="background:linear-gradient(135deg, ${THEMES[e.map].top}, ${THEMES[e.map].wall} 55%, ${THEMES[e.map].liquid})"></span>
+        <span class="arena-text"><b>${live ? "🔴 " : ""}${THEMES[e.map].name} · ${e.mode ? "☀ day" : "🌙 night"}</b>
+        <span>${label[a.status] ?? "?"} · ${live ? `${alive} of ${a.playerCount} alive` : `${a.playerCount} players`} · ${ago} min ago</span></span>
+      </button>`;
+    })
+    .join("");
+  list.querySelectorAll<HTMLElement>("[data-id]").forEach((b) => b.addEventListener("click", () => go(new BN(b.dataset.id!))));
 }
 
 /**
@@ -391,6 +442,7 @@ async function quickPlay() {
   heroChar = null;
   for (const k of [...scene.characters.keys()]) if (k >= 100) scene.characters.delete(k);
   scene.setMap(myMap);
+  scene.setDaylight(myMode === 1);
   scene.heroAt.set(11, 12);
   const yard = new WarmupYard(scene, ui, mySkin, myName);
   sfx.ambience(true);
@@ -398,7 +450,7 @@ async function quickPlay() {
   let playerCount = 0;
   try {
     yard.setStep("arena", "active");
-    await me.createArena(id, new BN(0), MAX_PLAYERS, myName, mySkin, myMap);
+    await me.createArena(id, new BN(0), MAX_PLAYERS, myName, mySkin, myMap, myMode);
     kv.set(`nightfall-host-${id}`, "1");
     kv.set(`nightfall-quick-${id}`, "1");
     const mySeal = me.sealMyVision(id, 0);

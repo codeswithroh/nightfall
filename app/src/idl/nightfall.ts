@@ -236,6 +236,53 @@ export type Nightfall = {
           "writable": true
         },
         {
+          "name": "broadcast",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  111,
+                  97,
+                  100,
+                  99,
+                  97,
+                  115,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "arenaId"
+              }
+            ]
+          }
+        },
+        {
+          "name": "registry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  103,
+                  105,
+                  115,
+                  116,
+                  114,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "vault",
           "writable": true,
           "pda": {
@@ -295,6 +342,10 @@ export type Nightfall = {
         },
         {
           "name": "mapId",
+          "type": "u8"
+        },
+        {
+          "name": "mode",
           "type": "u8"
         }
       ]
@@ -962,6 +1013,10 @@ export type Nightfall = {
           "writable": true
         },
         {
+          "name": "broadcast",
+          "writable": true
+        },
+        {
           "name": "magicProgram",
           "address": "Magic11111111111111111111111111111111111111"
         }
@@ -1232,6 +1287,33 @@ export type Nightfall = {
               }
             ]
           }
+        },
+        {
+          "name": "broadcast",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  111,
+                  97,
+                  100,
+                  99,
+                  97,
+                  115,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "arena.arena_id",
+                "account": "arena"
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -1249,6 +1331,32 @@ export type Nightfall = {
         211,
         232,
         168
+      ]
+    },
+    {
+      "name": "broadcast",
+      "discriminator": [
+        202,
+        126,
+        229,
+        129,
+        109,
+        99,
+        195,
+        112
+      ]
+    },
+    {
+      "name": "registry",
+      "discriminator": [
+        47,
+        174,
+        110,
+        246,
+        184,
+        182,
+        252,
+        218
       ]
     },
     {
@@ -1406,6 +1514,15 @@ export type Nightfall = {
                 "type": "u8"
               }
             ]
+          },
+          {
+            "name": "broadcast",
+            "fields": [
+              {
+                "name": "arenaId",
+                "type": "u64"
+              }
+            ]
           }
         ]
       }
@@ -1551,6 +1668,135 @@ export type Nightfall = {
             "docs": [
               "Which arena map (see map.rs)."
             ],
+            "type": "u8"
+          },
+          {
+            "name": "mode",
+            "docs": [
+              "0 night (torchlight), 1 daylight (longer sight)."
+            ],
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "broadcast",
+      "docs": [
+        "What spectators see: everyone's position from ~10 seconds ago. Public by design; the delay",
+        "means a spectator can never feed a live position to a player."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "arenaId",
+            "type": "u64"
+          },
+          {
+            "name": "snapshotTs",
+            "docs": [
+              "When this snapshot was taken (0 = nothing yet)."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "x",
+            "type": {
+              "array": [
+                "u8",
+                6
+              ]
+            }
+          },
+          {
+            "name": "y",
+            "type": {
+              "array": [
+                "u8",
+                6
+              ]
+            }
+          },
+          {
+            "name": "hp",
+            "type": {
+              "array": [
+                "u8",
+                6
+              ]
+            }
+          },
+          {
+            "name": "facing",
+            "type": {
+              "array": [
+                "u8",
+                6
+              ]
+            }
+          },
+          {
+            "name": "version",
+            "type": "u32"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "registry",
+      "docs": [
+        "Public list of recently opened arenas, so spectators can browse without a code."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "ids",
+            "type": {
+              "array": [
+                "u64",
+                16
+              ]
+            }
+          },
+          {
+            "name": "maps",
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
+          },
+          {
+            "name": "modes",
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
+          },
+          {
+            "name": "created",
+            "type": {
+              "array": [
+                "i64",
+                16
+              ]
+            }
+          },
+          {
+            "name": "head",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
             "type": "u8"
           }
         ]
@@ -1857,6 +2103,36 @@ export type Nightfall = {
                 6
               ]
             }
+          },
+          {
+            "name": "history",
+            "docs": [
+              "Ring of past snapshots: [x×6, y×6, hp×6, facing×6]. Feeds the delayed broadcast."
+            ],
+            "type": {
+              "array": [
+                {
+                  "array": [
+                    "u8",
+                    24
+                  ]
+                },
+                5
+              ]
+            }
+          },
+          {
+            "name": "historyTs",
+            "type": {
+              "array": [
+                "i64",
+                5
+              ]
+            }
+          },
+          {
+            "name": "historyHead",
+            "type": "u8"
           }
         ]
       }
